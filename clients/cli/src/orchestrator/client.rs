@@ -4,9 +4,8 @@
 
 use crate::environment::Environment;
 use crate::nexus_orchestrator::{
-    GetProofTaskRequest, GetProofTaskResponse, GetTasksRequest, GetTasksResponse, NodeType,
-    RegisterNodeRequest, RegisterNodeResponse, RegisterUserRequest, SubmitProofRequest,
-    UserResponse,
+    GetProofTaskRequest, GetProofTaskResponse, GetTasksResponse, NodeType, RegisterNodeRequest,
+    RegisterNodeResponse, RegisterUserRequest, SubmitProofRequest, UserResponse,
 };
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::error::OrchestratorError;
@@ -61,13 +60,13 @@ impl OrchestratorClient {
             node_id: None,
         }
     }
-    
+
     /// 设置当前客户端的node_id，用于日志记录
     pub fn with_node_id(mut self, node_id: impl Into<String>) -> Self {
         self.node_id = Some(node_id.into());
         self
     }
-    
+
     /// 获取当前设置的node_id，用于日志记录
     pub fn get_node_id(&self) -> Option<&str> {
         self.node_id.as_deref()
@@ -92,7 +91,7 @@ impl OrchestratorClient {
     async fn handle_response_status(&self, response: Response) -> Result<Response, OrchestratorError> {
         let status = response.status();
         let url = response.url().to_string();
-        
+
         if !status.is_success() {
             // 添加node_id信息到日志
             let node_info = if let Some(node_id) = &self.node_id {
@@ -100,11 +99,11 @@ impl OrchestratorClient {
             } else {
                 "".to_string()
             };
-            
+
             log::warn!("{}HTTP request failed with status: {} (url: {})", node_info, status, url);
             return Err(OrchestratorError::from_response(response).await);
         }
-        
+
         // 成功时也可以添加node_id，但这是调试日志，不是必需的
         log::debug!("HTTP request succeeded with status: {} (url: {})", status, url);
         Ok(response)
@@ -113,44 +112,11 @@ impl OrchestratorClient {
     async fn get_request<T: Message + Default>(
         &self,
         endpoint: &str,
-        body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
         let url = self.build_url(endpoint);
-        log::debug!("Sending GET request to {}", url);
-        
-        let response = match self
-            .client
-            .get(&url)
-            .header("Content-Type", "application/octet-stream")
-            .body(body)
-            .send()
-            .await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    log::debug!("GET response status: {} for {}", status, url);
-                    resp
-                },
-                Err(e) => {
-                    // 尝试从错误中提取状态码
-                    let status_info = if let Some(status) = e.status() {
-                        format!("[Status: {}] ", status.as_u16())
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    // 添加node_id信息到日志
-                    let node_info = if let Some(node_id) = &self.node_id {
-                        format!("[node_id={}] ", node_id)
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    log::error!("GET request failed: {}{}{}(url: {})", node_info, status_info, e, url);
-                    return Err(e.into());
-                }
-            };
+        let response = self.client.get(&url).send().await?;
 
-        let response = self.handle_response_status(response).await?;
+        let response = Self::handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
         Self::decode_response(&response_bytes)
     }
@@ -161,41 +127,15 @@ impl OrchestratorClient {
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
         let url = self.build_url(endpoint);
-        log::debug!("Sending POST request to {}", url);
-        
-        let response = match self
+        let response = self
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send()
-            .await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    log::debug!("POST response status: {} for {}", status, url);
-                    resp
-                },
-                Err(e) => {
-                    // 尝试从错误中提取状态码
-                    let status_info = if let Some(status) = e.status() {
-                        format!("[Status: {}] ", status.as_u16())
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    // 添加node_id信息到日志
-                    let node_info = if let Some(node_id) = &self.node_id {
-                        format!("[node_id={}] ", node_id)
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    log::error!("POST request failed: {}{}{}(url: {})", node_info, status_info, e, url);
-                    return Err(e.into());
-                }
-            };
+            .await?;
 
-        let response = self.handle_response_status(response).await?;
+        let response = Self::handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
         Self::decode_response(&response_bytes)
     }
@@ -206,41 +146,15 @@ impl OrchestratorClient {
         body: Vec<u8>,
     ) -> Result<(), OrchestratorError> {
         let url = self.build_url(endpoint);
-        log::debug!("Sending POST request (no response) to {}", url);
-        
-        let response = match self
+        let response = self
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send()
-            .await {
-                Ok(resp) => {
-                    let status = resp.status();
-                    log::debug!("POST (no response) status: {} for {}", status, url);
-                    resp
-                },
-                Err(e) => {
-                    // 尝试从错误中提取状态码
-                    let status_info = if let Some(status) = e.status() {
-                        format!("[Status: {}] ", status.as_u16())
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    // 添加node_id信息到日志
-                    let node_info = if let Some(node_id) = &self.node_id {
-                        format!("[node_id={}] ", node_id)
-                    } else {
-                        "".to_string()
-                    };
-                    
-                    log::error!("POST (no response) request failed: {}{}{}(url: {})", node_info, status_info, e, url);
-                    return Err(e.into());
-                }
-            };
+            .await?;
 
-        let _ = self.handle_response_status(response).await?;
+        Self::handle_response_status(response).await?;
         Ok(())
     }
 
@@ -333,9 +247,9 @@ impl OrchestratorClient {
             Err("Invalid country code from ipinfo.io".into())
         }
     }
-    
+
     /// 获取当前出网 IP 的详细信息
-    /// 
+    ///
     /// 返回 ipinfo.io 的完整 JSON 响应，包含 IP、地理位置、ISP 等信息
     /// 如果使用了代理，会显示代理的出网 IP
     /// 返回的JSON会被转换为单行紧凑格式
@@ -346,7 +260,7 @@ impl OrchestratorClient {
         } else {
             "".to_string()
         };
-        
+
         // 发送请求获取IP信息
         log::info!("{}{}", node_info, "发送请求获取IP信息...");
         let response = match self
@@ -369,7 +283,7 @@ impl OrchestratorClient {
                 return Err(Box::new(e));
             }
         };
-        
+
         // 尝试将JSON转换为单行紧凑格式
         let result = match serde_json::from_str::<serde_json::Value>(&ip_info) {
             Ok(json_value) => {
@@ -380,7 +294,7 @@ impl OrchestratorClient {
             },
             Err(_) => ip_info.clone() // 如果解析失败，使用原始字符串
         };
-        
+
         log::info!("{}{}", node_info, "成功获取IP信息");
         Ok(result)
     }
@@ -408,7 +322,7 @@ impl Orchestrator for OrchestratorClient {
         let wallet_path = urlencoding::encode(wallet_address).into_owned();
         let endpoint = format!("v3/users/{}", wallet_path);
 
-        let user_response: UserResponse = self.get_request(&endpoint, vec![]).await?;
+        let user_response: UserResponse = self.get_request(&endpoint).await?;
         Ok(user_response.user_id)
     }
 
@@ -441,13 +355,7 @@ impl Orchestrator for OrchestratorClient {
     }
 
     async fn get_tasks(&self, node_id: &str) -> Result<Vec<Task>, OrchestratorError> {
-        let request = GetTasksRequest {
-            node_id: node_id.to_string(),
-            next_cursor: "".to_string(),
-        };
-        let request_bytes = Self::encode_request(&request);
-
-        let response: GetTasksResponse = self.get_request("v3/tasks", request_bytes).await?;
+        let response: GetTasksResponse = self.get_request(&format!("v3/tasks/{}", node_id)).await?;
         let tasks = response.tasks.iter().map(Task::from).collect();
         Ok(tasks)
     }
@@ -482,7 +390,7 @@ impl Orchestrator for OrchestratorClient {
         } else {
             "".to_string()
         };
-        
+
         // 记录开始提交证明的日志
         log::info!("{}开始提交证明: task_id={}, proof_hash={}", node_info, task_id, proof_hash);
         let (program_memory, total_memory) = get_memory_info();
@@ -526,7 +434,7 @@ impl Orchestrator for OrchestratorClient {
                     },
                     _ => false,
                 };
-                
+
                 if is_rate_limit {
                     log::warn!("{}遇到限流 (429)，本次提交证明失败: task_id={}", node_info, task_id);
                     // // 等待10秒
@@ -543,7 +451,7 @@ impl Orchestrator for OrchestratorClient {
                     //     }
                     // }
                 }
-                
+
                 // 如果不是429错误，记录错误日志并返回错误
                 log::warn!("{}证明提交失败: task_id={}, proof_hash={}, error={}", node_info, task_id, proof_hash, err);
                 Err(err)
@@ -554,7 +462,7 @@ impl Orchestrator for OrchestratorClient {
                 Ok(result)
             },
         };
-        
+
         result
     }
 }

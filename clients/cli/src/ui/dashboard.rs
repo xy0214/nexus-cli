@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::prelude::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use std::collections::VecDeque;
 use std::time::Instant;
 
@@ -37,6 +37,12 @@ pub struct DashboardState {
 
     /// A queue of events received from worker threads.
     pub events: VecDeque<WorkerEvent>,
+
+    /// Whether a new version is available.
+    pub update_available: bool,
+
+    /// The latest version string, if known.
+    pub latest_version: Option<String>,
 }
 
 impl DashboardState {
@@ -52,6 +58,9 @@ impl DashboardState {
         start_time: Instant,
         events: &VecDeque<WorkerEvent>,
     ) -> Self {
+        // Check for version update messages in recent events
+        let (update_available, latest_version) = Self::check_for_version_updates(events);
+
         Self {
             node_id,
             environment,
@@ -61,7 +70,37 @@ impl DashboardState {
             total_cores: system::num_cores(),
             total_ram_gb: system::total_memory_gb(),
             events: events.clone(),
+            update_available,
+            latest_version,
         }
+    }
+
+    /// Check recent events for version update information
+    fn check_for_version_updates(events: &VecDeque<WorkerEvent>) -> (bool, Option<String>) {
+        // Look for the most recent version checker success event
+        for event in events.iter().rev() {
+            if matches!(event.worker, Worker::VersionChecker)
+                && event.event_type == EventType::Success
+            {
+                // Parse the version from the message
+                if let Some(version) = Self::extract_version_from_message(&event.msg) {
+                    return (true, Some(version));
+                }
+            }
+        }
+        (false, None)
+    }
+
+    /// Extract version number from version checker message
+    fn extract_version_from_message(message: &str) -> Option<String> {
+        // Look for pattern like "New version v0.9.1 available!"
+        if let Some(start) = message.find("version ") {
+            let after_version = &message[start + 8..];
+            if let Some(end) = after_version.find(" available") {
+                return Some(after_version[..end].to_string());
+            }
+        }
+        None
     }
 
     /// Get a ratatui color for a worker based on its type and ID
@@ -85,6 +124,7 @@ impl DashboardState {
                 colors[*worker_id % colors.len()]
             }
             Worker::ProofSubmitter => Color::White,
+            Worker::VersionChecker => Color::LightCyan,
         }
     }
 
@@ -103,21 +143,6 @@ impl DashboardState {
             }
         } else {
             timestamp.to_string()
-        }
-    }
-
-    /// Truncate long messages to prevent layout overflow
-    fn truncate_message(msg: &str, max_length: usize) -> String {
-        if msg.len() <= max_length {
-            msg.to_string()
-        } else {
-            // Try to truncate at word boundary if possible
-            let truncate_target = max_length.saturating_sub(3);
-            if let Some(last_space) = msg[..truncate_target].rfind(' ') {
-                format!("{}...", &msg[..last_space])
-            } else {
-                format!("{}...", &msg[..truncate_target])
-            }
         }
     }
 
@@ -169,11 +194,6 @@ impl DashboardState {
     }
 }
 
-// const SUCCESS_ICON: &str = "✅";
-// const ERROR_ICON: &str = "⚠️";
-// const REFRESH_ICON: &str = "🔄";
-// const SHUTDOWN_ICON: &str = "🔴";
-
 /// Render the dashboard screen.
 pub fn render_dashboard(f: &mut Frame, state: &DashboardState) {
     let chunks = Layout::default()
@@ -188,92 +208,123 @@ pub fn render_dashboard(f: &mut Frame, state: &DashboardState) {
         )
         .split(f.area());
 
-    // Title section
+    // Title section with version info
     let version = env!("CARGO_PKG_VERSION");
-    let title_text = format!("=== NEXUS PROVER v{} ===", version);
+    let title_text = if state.update_available {
+        if let Some(latest) = &state.latest_version {
+            format!(
+                "=== NEXUS PROVER v{} → 🚀 {} UPDATE AVAILABLE ===",
+                version, latest
+            )
+        } else {
+            format!("=== NEXUS PROVER v{} → 🚀 UPDATE AVAILABLE ===", version)
+        }
+    } else {
+        format!("=== NEXUS PROVER v{} ===", version)
+    };
+
+    let title_color = if state.update_available {
+        Color::LightYellow // Highlight when update is available
+    } else {
+        Color::Cyan
+    };
+
     let title_block = Block::default().borders(Borders::BOTTOM);
     let title = Paragraph::new(title_text)
-        .alignment(Alignment::Center) // ← Horizontally center the text
+        .alignment(Alignment::Center)
         .style(
             Style::default()
-                .fg(Color::Cyan)
+                .fg(title_color)
                 .add_modifier(Modifier::BOLD),
         )
         .block(title_block);
     f.render_widget(title, chunks[0]);
 
     // Body layout: Split into two columns (status and logs)
-    // Make status column slightly wider to accommodate more text
     let body_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(28), Constraint::Percentage(72)].as_ref())
         .split(chunks[1]);
 
-    // --- Status using List ---
-    let mut status_list_state = ListState::default();
-    let status: List = {
-        let status_block = Block::default()
-            .borders(Borders::RIGHT)
-            .title("STATUS")
-            .style(
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        let mut items: Vec<ListItem> = Vec::new();
-
-        // Display the node ID, if any, or "Not connected" if not available
-        let node_id_text = if let Some(id) = state.node_id {
-            format!("NODE ID: {}", id)
-        } else {
-            "NODE ID: Not connected".to_string()
-        };
-        items.push(ListItem::new(node_id_text));
-
-        // Environment
-        items.push(ListItem::new(format!("ENVIRONMENT: {}", state.environment)));
-
-        // Uptime in Days, Hours, Minutes, Seconds
-        let uptime = state.start_time.elapsed();
-        let uptime_string = format!(
-            "UPTIME: {}d {}h {}m {}s",
-            uptime.as_secs() / 86400,
-            (uptime.as_secs() % 86400) / 3600,
-            (uptime.as_secs() % 3600) / 60,
-            uptime.as_secs() % 60
+    // Status Section
+    let status_block = Block::default()
+        .borders(Borders::RIGHT)
+        .title("STATUS")
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         );
-        items.push(ListItem::new(uptime_string));
 
-        // NEX Points
-        if let Some(nex_points) = state.nex_points {
-            items.push(ListItem::new(format!("NEX POINTS: {}", nex_points)));
-        }
+    let mut status_lines = Vec::new();
 
-        // Current Task
-        if let Some(task) = &state.current_task {
-            items.push(ListItem::new(format!("CURRENT TASK: {}", task)));
-        }
-
-        // Total Cores
-        items.push(ListItem::new(format!("TOTAL CORES: {}", state.total_cores)));
-
-        // Total RAM in GB
-        items.push(ListItem::new(format!(
-            "TOTAL RAM: {:.3} GB",
-            state.total_ram_gb
-        )));
-
-        List::new(items)
-            .style(Style::default().fg(Color::Cyan))
-            .block(status_block)
-            .highlight_style(Style::default().fg(Color::Cyan))
-            .highlight_symbol("> ")
+    // Display the node ID, if any, or "Not connected" if not available
+    let node_id_text = if let Some(id) = state.node_id {
+        format!("NODE ID: {}", id)
+    } else {
+        "NODE ID: Not connected".to_string()
     };
-    f.render_stateful_widget(status, body_chunks[0], &mut status_list_state);
+    status_lines.push(Line::from(node_id_text));
 
-    // Create styled log items with enhanced UX and visual improvements
-    let log_items: Vec<ListItem> = state
+    // Environment
+    status_lines.push(Line::from(format!("ENVIRONMENT: {}", state.environment)));
+
+    // Version status
+    if state.update_available {
+        if let Some(latest) = &state.latest_version {
+            let version_text = format!("VERSION: {} → {}", version, latest);
+            status_lines.push(Line::from(vec![Span::styled(
+                version_text,
+                Style::default().fg(Color::LightYellow),
+            )]));
+        } else {
+            status_lines.push(Line::from(vec![Span::styled(
+                "VERSION: Update Available",
+                Style::default().fg(Color::LightYellow),
+            )]));
+        }
+    } else {
+        status_lines.push(Line::from(format!("VERSION: {}", version)));
+    }
+
+    // Uptime in Days, Hours, Minutes, Seconds
+    let uptime = state.start_time.elapsed();
+    let uptime_string = format!(
+        "UPTIME: {}d {}h {}m {}s",
+        uptime.as_secs() / 86400,
+        (uptime.as_secs() % 86400) / 3600,
+        (uptime.as_secs() % 3600) / 60,
+        uptime.as_secs() % 60
+    );
+    status_lines.push(Line::from(uptime_string));
+
+    // NEX Points
+    if let Some(nex_points) = state.nex_points {
+        status_lines.push(Line::from(format!("NEX POINTS: {}", nex_points)));
+    }
+
+    // Current Task
+    if let Some(task) = &state.current_task {
+        status_lines.push(Line::from(format!("CURRENT TASK: {}", task)));
+    }
+
+    // Total Cores
+    status_lines.push(Line::from(format!("TOTAL CORES: {}", state.total_cores)));
+
+    // Total RAM in GB
+    status_lines.push(Line::from(format!(
+        "TOTAL RAM: {:.3} GB",
+        state.total_ram_gb
+    )));
+
+    let status_paragraph = Paragraph::new(status_lines)
+        .block(status_block)
+        .style(Style::default().fg(Color::Cyan))
+        .wrap(Wrap { trim: true });
+    f.render_widget(status_paragraph, body_chunks[0]);
+
+    // Logs Section
+    let log_lines: Vec<Line> = state
         .events
         .iter()
         .filter(|event| event.should_display())
@@ -290,17 +341,17 @@ pub fn render_dashboard(f: &mut Frame, state: &DashboardState) {
                 Worker::TaskFetcher => "Fetcher".to_string(),
                 Worker::Prover(worker_id) => format!("P{}", worker_id),
                 Worker::ProofSubmitter => "Submitter".to_string(),
+                Worker::VersionChecker => "Version".to_string(),
             };
 
             let worker_color = DashboardState::get_worker_color(&event.worker);
             let compact_time = DashboardState::format_compact_timestamp(&event.timestamp);
 
-            // Clean HTTP error messages first, then truncate if needed
+            // Clean HTTP error messages
             let cleaned_msg = DashboardState::clean_http_error_message(&event.msg);
-            let final_msg = DashboardState::truncate_message(&cleaned_msg, 120);
 
-            // Create a more structured layout with better visual hierarchy
-            let line = Line::from(vec![
+            // Create a structured line with colored spans
+            Line::from(vec![
                 // Main status icon
                 Span::raw(format!("{} ", main_icon)),
                 // Compact timestamp in muted color
@@ -315,33 +366,39 @@ pub fn render_dashboard(f: &mut Frame, state: &DashboardState) {
                         .fg(worker_color)
                         .add_modifier(Modifier::BOLD),
                 ),
-                // Cleaned and truncated message in worker color
-                Span::styled(final_msg, Style::default().fg(worker_color)),
-            ]);
-
-            ListItem::new(line)
+                // Cleaned message in worker color
+                Span::styled(cleaned_msg, Style::default().fg(worker_color)),
+            ])
         })
         .collect();
 
-    let final_log_items = if log_items.is_empty() {
-        vec![ListItem::new("Starting...")]
+    let log_paragraph = if log_lines.is_empty() {
+        Paragraph::new(vec![Line::from("Starting...")])
     } else {
-        log_items
+        Paragraph::new(log_lines)
     };
 
-    let log_widget = List::new(final_log_items)
-        .block(Block::default().title("LOGS").borders(Borders::NONE))
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let log_widget = log_paragraph
+        .block(
+            Block::default().title("LOGS").borders(Borders::NONE).style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        )
+        .wrap(Wrap { trim: true });
 
     f.render_widget(log_widget, body_chunks[1]);
 
-    // Footer
-    let footer = Paragraph::new("[Q] Quit")
-        .alignment(Alignment::Center) // ← Horizontally center the text
+    // Footer with version info
+    let footer_text = if state.update_available {
+        "[Q] Quit | 🚀 New version available! Check release notes at github.com/nexus-xyz/nexus-cli"
+    } else {
+        "[Q] Quit"
+    };
+
+    let footer = Paragraph::new(footer_text)
+        .alignment(Alignment::Center)
         .style(
             Style::default()
                 .fg(Color::Cyan)

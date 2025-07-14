@@ -37,7 +37,7 @@ use rand::{distributions::Alphanumeric, Rng};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // 包装start函数，处理错误日志记录
-async fn start_node_wrapper(node_id: u64, env: Environment, config_path: std::path::PathBuf, 
+async fn start_node_wrapper(node_id: u64, env: Environment, config_path: std::path::PathBuf,
                           headless: bool, max_threads: Option<u32>, proxy: Option<String>) {
     if let Err(e) = start(Some(node_id), env, config_path, headless, max_threads, proxy).await {
         log::error!("Error starting node {}: {}", node_id, e);
@@ -93,7 +93,7 @@ fn generate_random_session_id() -> String {
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_millis();
-    
+
     // 生成16位数字+大小写字母混合字符串
     use rand::distributions::Uniform;
     use rand::distributions::Distribution;
@@ -105,7 +105,7 @@ fn generate_random_session_id() -> String {
             CHARSET[idx] as char
         })
         .collect();
-    
+
     format!("{}{}", timestamp, rand_chars)
 }
 
@@ -114,7 +114,7 @@ fn convert_proxy_format(proxy: &str) -> Option<String> {
     if proxy.trim().is_empty() {
         return None;
     }
-    
+
     let parts: Vec<&str> = proxy.split(':').collect();
     if parts.len() == 4 {
         // 检查username部分是否包含{random_session_id}
@@ -129,7 +129,7 @@ fn convert_proxy_format(proxy: &str) -> Option<String> {
         } else {
             username.to_string()
         };
-        
+
         // ip:port:user:pass => http://user:pass@ip:port
         Some(format!("http://{}:{}@{}:{}", username_with_session_id, parts[3], parts[0], parts[1]))
     } else if proxy.starts_with("http://") || proxy.starts_with("https://") {
@@ -168,23 +168,23 @@ fn read_register_node_csv(path: &str) -> io::Result<Vec<(String, u32, Option<Str
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
     let mut result = Vec::new();
-    
+
     for (i, line) in reader.lines().enumerate() {
         let line = line?;
         if i == 0 { continue; } // 跳过表头
-        
+
         let parts: Vec<&str> = line.split(',').collect();
         if parts.len() < 2 {
             log::warn!("Invalid CSV line format: {}", line);
             continue;
         }
-        
+
         let user_id = parts[0].trim().to_string();
         if user_id.is_empty() {
             log::warn!("Empty user_id in line: {}", line);
             continue;
         }
-        
+
         let node_qty = match parts[1].trim().parse::<u32>() {
             Ok(qty) => qty,
             Err(_) => {
@@ -192,7 +192,7 @@ fn read_register_node_csv(path: &str) -> io::Result<Vec<(String, u32, Option<Str
                 continue;
             }
         };
-        
+
         // 保存原始代理字符串和转换后的代理字符串
         let (original_proxy, converted_proxy) = if parts.len() > 2 && !parts[2].trim().is_empty() {
             let proxy_str = parts[2].trim().to_string();
@@ -200,10 +200,10 @@ fn read_register_node_csv(path: &str) -> io::Result<Vec<(String, u32, Option<Str
         } else {
             (None, None)
         };
-        
+
         result.push((user_id, node_qty, original_proxy, converted_proxy));
     }
-    
+
     Ok(result)
 }
 
@@ -213,18 +213,18 @@ fn write_register_results_csv(
     output_path: &str,
 ) -> io::Result<()> {
     use std::io::Write;
-    
+
     let mut file = std::fs::File::create(output_path)?;
-    
+
     // 写入 CSV 表头
     writeln!(file, "node_id,proxy,user_id")?;
-    
+
     // 写入数据行
     for (node_id, proxy, user_id) in results {
         let proxy_str = proxy.as_deref().unwrap_or("");
         writeln!(file, "{},{},{}", node_id, proxy_str, user_id)?;
     }
-    
+
     Ok(())
 }
 
@@ -232,7 +232,7 @@ fn write_register_results_csv(
 async fn main() -> Result<(), Box<dyn Error>> {
     // 使用最简单可靠的方式初始化日志系统
     env_logger::init();
-    
+
     // 记录启动日志
     log::info!("Starting nexus-network-batch with logging enabled");
     let nexus_environment_str = std::env::var("NEXUS_ENVIRONMENT").unwrap_or_default();
@@ -249,26 +249,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         } => {
             log::info!("Reading register node file: {}", wait_register_node_file);
             let register_infos = read_register_node_csv(&wait_register_node_file)?;
-            
+
             if register_infos.is_empty() {
                 log::warn!("No valid entries found in the register node file");
                 return Ok(());
             }
-            
+
             log::info!("Found {} user entries to register nodes", register_infos.len());
-            
+
             // 创建结果收集器
             let mut results = Vec::new();
-            
+
             // 生成输出文件名（使用当前时间）
             use chrono::Local;
             let now = Local::now();
             let output_filename = format!("register_results_{}.csv", now.format("%Y%m%d_%H%M%S"));
-            
+
             // 为每个用户注册指定数量的节点
             for (user_id, node_qty, original_proxy, converted_proxy) in register_infos {
                 log::info!("Processing user_id: {}, node_qty: {}", user_id, node_qty);
-                
+
                 // 创建 OrchestratorClient 实例，带有可选的代理
                 let orchestrator_client = OrchestratorClient::new_with_proxy(environment.clone(), converted_proxy.clone());
                 // 获取当前出网 IP 信息
@@ -288,14 +288,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         }
                     },
                 }
-                
+
                 // 为该用户注册指定数量的节点
                 let mut rate_limited = false;
                 for _ in 0..node_qty {
                     if rate_limited {
                         break; // 如果遇到速率限制，跳出循环
                     }
-                    
+
                     match orchestrator_client.register_node_super(&user_id).await {
                         Ok(node_id) => {
                             // 尝试将 node_id 解析为 u64
@@ -322,14 +322,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             log::error!("Failed to register node for user {}: {}", user_id, e);
                         }
                     }
-                    
+
                     if !rate_limited {
                         // 添加短暂延迟，避免请求过于频繁
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                     }
                 }
             }
-            
+
             // 将结果写入 CSV 文件
             if !results.is_empty() {
                 match write_register_results_csv(&results, &output_filename) {
@@ -339,7 +339,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 log::warn!("No nodes were successfully registered");
             }
-            
+
             log::info!("Node registration completed");
             return Ok(());
         },
@@ -350,15 +350,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         } => {
             let node_infos = read_node_id_csv(&node_id_file)?;
             let mut handles = Vec::new();
-            
+
             // 计算启动多个节点所需的总时间（以毫秒为单位）
             // 目标：2分钟内启动所有节点
             let total_time_ms = 120 * 1000;
-            
+
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
             log::info!("共找到 {} 个节点需要启动", num_nodes);
-            
+
             // 动态调整延迟区间
             let (min_delay, max_delay, total_time_ms, delay_desc) = if num_nodes <= 1 {
                 (0, 0, 0, "无需延迟".to_string())
@@ -374,25 +374,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 (min_delay, max_delay, total_time_ms, format!("预计在2分钟内完成（节点启动间隔: {}-{}ms）", min_delay, max_delay))
             };
             log::info!("开始启动 {} 个节点，{}", num_nodes, delay_desc);
-            
+
             // 逐个启动节点
             for (i, (node_id, proxy)) in node_infos.into_iter().enumerate() {
                 let env = environment.clone();
                 let config_path = config_path.clone();
                 let proxy_clone = proxy.clone();
-                
+
                 // 使用包装函数启动节点，完全在内部处理错误
                 let node_id_copy = node_id;
                 let handle = tokio::spawn(async move {
                     start_node_wrapper(node_id_copy, env, config_path, headless, max_threads, proxy_clone).await;
                 });
                 handles.push(handle);
-                
+
                 // 在启动下一个节点之前随机暂停
                 if i < num_nodes - 1 { // 最后一个节点不需要暂停
                     use rand::Rng;
                     let delay = rand::thread_rng().gen_range(min_delay..=max_delay);
-                    
+
                     // 如果是大量节点，定期输出进度日志
                     if num_nodes > 100 && (i + 1) % 100 == 0 {
                         let progress = (i + 1) * 100 / num_nodes;
@@ -400,11 +400,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     } else {
                         log::debug!("启动节点 {} 后暂停 {}ms", node_id, delay);
                     }
-                    
+
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
                 }
             }
-            
+
             log::info!("所有 {} 个节点已成功启动", num_nodes);
             for handle in handles {
                 let _ = handle.await;
@@ -469,14 +469,14 @@ async fn start(
     // Create a signing key for the prover.
     let mut csprng = rand_core::OsRng;
     let signing_key: SigningKey = SigningKey::generate(&mut csprng);
-    
+
     // 创建OrchestratorClient并设置node_id
     let orchestrator_client = if let Some(id) = node_id {
         OrchestratorClient::new_with_proxy(env, proxy.clone()).with_node_id(id.to_string())
     } else {
         OrchestratorClient::new_with_proxy(env, proxy.clone())
     };
-    
+
         // 获取当前出网 IP 信息
     match orchestrator_client.get_ip_info().await {
         Ok(ip_info) => {
@@ -520,19 +520,21 @@ async fn start(
     let client_id = if config_path.exists() {
         match Config::load_from_file(&config_path) {
             Ok(config) => {
-                // First try user_id, then node_id, then fallback to UUID
-                if !config.user_id.is_empty() {
-                    config.user_id
-                } else if !config.node_id.is_empty() {
-                    config.node_id
+                // If user has a node_id, use "cli-{node_id}" format
+                if !config.node_id.is_empty() {
+                    format!("cli-{}", config.node_id)
+                } else if !config.user_id.is_empty() {
+                    // Fallback to user_id if no node_id but user is registered
+                    format!("cli-{}", config.user_id)
                 } else {
-                    uuid::Uuid::new_v4().to_string() // Fallback to random UUID
+                    // No node_id or user_id - this shouldn't happen with current flow
+                    "anonymous".to_string()
                 }
             }
-            Err(_) => uuid::Uuid::new_v4().to_string(), // Fallback to random UUID
+            Err(_) => "anonymous".to_string(), // Fallback to anonymous
         }
     } else {
-        uuid::Uuid::new_v4().to_string() // Fallback to random UUID
+        "anonymous".to_string() // No config file = anonymous user
     };
 
     let (mut event_receiver, mut join_handles) = match node_id {
