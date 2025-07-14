@@ -18,6 +18,7 @@ mod register;
 pub mod system;
 mod task;
 mod task_cache;
+mod version_checker;
 
 mod workers;
 

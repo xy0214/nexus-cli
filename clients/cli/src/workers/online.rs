@@ -151,7 +151,7 @@ async fn attempt_task_fetch(
         BATCH_SIZE,
         event_sender,
     );
-    let timeout_duration = Duration::from_secs(15); // 60 second timeout --> 15s todo
+    let timeout_duration = Duration::from_secs(60); // 60 second timeout --> 15s todo
 
     match tokio::time::timeout(timeout_duration, fetch_future).await {
         Ok(fetch_result) => match fetch_result {
