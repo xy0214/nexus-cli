@@ -11,6 +11,7 @@ use crate::events::{Event, EventType};
 use crate::prover::authenticated_proving;
 use crate::task::Task;
 use nexus_sdk::stwo::seq::Proof;
+use rand::Rng;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
@@ -53,7 +54,7 @@ pub fn start_dispatcher(
 /// A tuple containing:
 /// * A vector of `Sender<Task>` for each worker, allowing tasks to be sent to them.
 /// * A vector of `JoinHandle<()>` for each worker, allowing the main thread to await their completion.
-pub fn start_workers(
+pub async fn start_workers(
     num_workers: usize,
     results_sender: mpsc::Sender<(Task, Proof)>,
     event_sender: mpsc::Sender<Event>,
@@ -115,8 +116,10 @@ pub fn start_workers(
 
         senders.push(task_sender);
         handles.push(handle);
-    }
 
+    }
+    
+    // 返回发送者和处理程序
     (senders, handles)
 }
 

@@ -1,4 +1,4 @@
-use crate::ui::splash::LOGO_NAME;
+
 
 macro_rules! print_cmd_error {
     ($tt:tt) => {
@@ -32,7 +32,7 @@ macro_rules! print_cmd_info {
 
 pub(crate) fn print_friendly_error_header() {
     // RGB: FF = 255, AA = 170, 00 = 0
-    println!("\x1b[38;2;255;170;0m{}\x1b[0m", LOGO_NAME);
+    
     println!("\x1b[38;2;255;170;0mWe'll be back shortly!\x1b[0m");
     println!(
         "The orchestrator of the prover network is under unprecedented traffic. The team has been notified. Thank you for your patience while the issue is resolved.\n"

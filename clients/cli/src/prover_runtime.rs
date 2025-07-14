@@ -22,12 +22,16 @@ const MAX_COMPLETED_TASKS: usize = 500;
 pub async fn start_authenticated_workers(
     node_id: u64,
     signing_key: SigningKey,
-    orchestrator: OrchestratorClient,
+    mut orchestrator: OrchestratorClient,
     num_workers: usize,
     shutdown: broadcast::Receiver<()>,
     environment: Environment,
     client_id: String,
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
+    // 确保orchestrator客户端设置了node_id
+    if orchestrator.get_node_id().is_none() {
+        orchestrator = orchestrator.with_node_id(node_id.to_string());
+    }
     let mut join_handles = Vec::new();
     // Worker events
     let (event_sender, event_receiver) = mpsc::channel::<Event>(EVENT_QUEUE_SIZE);
@@ -67,7 +71,7 @@ pub async fn start_authenticated_workers(
         shutdown.resubscribe(),
         environment,
         client_id,
-    );
+    ).await;
     join_handles.extend(worker_handles);
 
     // Dispatch tasks to workers

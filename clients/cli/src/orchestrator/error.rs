@@ -27,6 +27,10 @@ pub enum OrchestratorError {
     Http { status: u16, message: String },
 }
 
+
+
+
+
 impl OrchestratorError {
     pub async fn from_response(response: reqwest::Response) -> OrchestratorError {
         let status = response.status().as_u16();
@@ -35,24 +39,35 @@ impl OrchestratorError {
             .await
             .unwrap_or_else(|_| "Failed to read response text".to_string());
 
+        log::debug!("HTTP Response Status: {}", status);
         OrchestratorError::Http { status, message }
     }
 
     pub fn to_pretty(&self) -> Option<String> {
         match self {
             Self::Http {
-                status: _,
+                status,
                 message: msg,
             } => {
                 if let Ok(parsed) = serde_json::from_str::<RawError>(msg) {
                     if let Ok(stringified) = serde_json::to_string_pretty(&parsed) {
-                        return Some(stringified);
+                        return Some(format!("[Status: {}] {}", status, stringified));
                     }
                 }
-
-                None
+                
+                // Return formatted status even if JSON parsing fails
+                return Some(format!("[Status: {}] {}", status, msg));
             }
-            _ => None,
+            Self::Reqwest(err) => {
+                // 获取状态码（如果有）
+                let status_str = err.status()
+                    .map(|s| s.as_u16().to_string())
+                    .unwrap_or_else(|| "Unknown".to_string());
+                return Some(format!("[Status: {}] {}", status_str, err));
+            }
+            Self::Decode(err) => {
+                return Some(format!("[Decode Error] {}", err));
+            }
         }
     }
 }

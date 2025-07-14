@@ -1,5 +1,5 @@
 [package]
-name = "nexus-network"
+name = "nexus-network-batch"
 version = "0.9.0"
 edition = "2024"
 rust-version = "1.85"
@@ -9,7 +9,7 @@ build = "build.rs"
 build_proto = []
 
 [[bin]]
-name = "nexus-network"
+name = "nexus-network-batch"
 path = "src/main.rs"
 
 [profile.dev]
@@ -33,6 +33,7 @@ codegen-units = 256
 incremental = true
 
 [dependencies]
+env_logger = "0.11"
 async-trait = "0.1.88"
 cfg-if = "1.0"
 chrono = "0.4.38"

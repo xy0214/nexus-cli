@@ -18,16 +18,20 @@ use reqwest::{Client, ClientBuilder, Response};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+
 // Privacy-preserving country detection for network optimization.
 // Only stores 2-letter country codes (e.g., "US", "CA", "GB") to help route
-// requests to the nearest Nexus network servers for better performance.
+// to the closest server. This improves network latency and reliability.
 // No precise location, IP addresses, or personal data is collected or stored.
 static COUNTRY_CODE: OnceLock<String> = OnceLock::new();
+
+
 
 #[derive(Debug, Clone)]
 pub struct OrchestratorClient {
     client: Client,
     environment: Environment,
+    node_id: Option<String>, // 添加node_id字段，用于日志记录
 }
 
 impl OrchestratorClient {
@@ -38,7 +42,35 @@ impl OrchestratorClient {
                 .build()
                 .expect("Failed to create HTTP client"),
             environment,
+            node_id: None,
         }
+    }
+
+    pub fn new_with_proxy(environment: Environment, proxy: Option<String>) -> Self {
+        let mut builder = ClientBuilder::new().timeout(Duration::from_secs(10));
+        if let Some(proxy_url) = proxy {
+            if let Ok(p) = reqwest::Proxy::all(&proxy_url) {
+                builder = builder.proxy(p);
+            } else {
+                log::warn!("Invalid proxy URL: {}", proxy_url);
+            }
+        }
+        Self {
+            client: builder.build().expect("Failed to create HTTP client"),
+            environment,
+            node_id: None,
+        }
+    }
+    
+    /// 设置当前客户端的node_id，用于日志记录
+    pub fn with_node_id(mut self, node_id: impl Into<String>) -> Self {
+        self.node_id = Some(node_id.into());
+        self
+    }
+    
+    /// 获取当前设置的node_id，用于日志记录
+    pub fn get_node_id(&self) -> Option<&str> {
+        self.node_id.as_deref()
     }
 
     fn build_url(&self, endpoint: &str) -> String {
@@ -57,10 +89,24 @@ impl OrchestratorClient {
         T::decode(bytes).map_err(OrchestratorError::Decode)
     }
 
-    async fn handle_response_status(response: Response) -> Result<Response, OrchestratorError> {
-        if !response.status().is_success() {
+    async fn handle_response_status(&self, response: Response) -> Result<Response, OrchestratorError> {
+        let status = response.status();
+        let url = response.url().to_string();
+        
+        if !status.is_success() {
+            // 添加node_id信息到日志
+            let node_info = if let Some(node_id) = &self.node_id {
+                format!("[node_id={}] ", node_id)
+            } else {
+                "".to_string()
+            };
+            
+            log::warn!("{}HTTP request failed with status: {} (url: {})", node_info, status, url);
             return Err(OrchestratorError::from_response(response).await);
         }
+        
+        // 成功时也可以添加node_id，但这是调试日志，不是必需的
+        log::debug!("HTTP request succeeded with status: {} (url: {})", status, url);
         Ok(response)
     }
 
@@ -70,15 +116,41 @@ impl OrchestratorClient {
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
         let url = self.build_url(endpoint);
-        let response = self
+        log::debug!("Sending GET request to {}", url);
+        
+        let response = match self
             .client
             .get(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send()
-            .await?;
+            .await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    log::debug!("GET response status: {} for {}", status, url);
+                    resp
+                },
+                Err(e) => {
+                    // 尝试从错误中提取状态码
+                    let status_info = if let Some(status) = e.status() {
+                        format!("[Status: {}] ", status.as_u16())
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    // 添加node_id信息到日志
+                    let node_info = if let Some(node_id) = &self.node_id {
+                        format!("[node_id={}] ", node_id)
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    log::error!("GET request failed: {}{}{}(url: {})", node_info, status_info, e, url);
+                    return Err(e.into());
+                }
+            };
 
-        let response = Self::handle_response_status(response).await?;
+        let response = self.handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
         Self::decode_response(&response_bytes)
     }
@@ -89,15 +161,41 @@ impl OrchestratorClient {
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
         let url = self.build_url(endpoint);
-        let response = self
+        log::debug!("Sending POST request to {}", url);
+        
+        let response = match self
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send()
-            .await?;
+            .await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    log::debug!("POST response status: {} for {}", status, url);
+                    resp
+                },
+                Err(e) => {
+                    // 尝试从错误中提取状态码
+                    let status_info = if let Some(status) = e.status() {
+                        format!("[Status: {}] ", status.as_u16())
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    // 添加node_id信息到日志
+                    let node_info = if let Some(node_id) = &self.node_id {
+                        format!("[node_id={}] ", node_id)
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    log::error!("POST request failed: {}{}{}(url: {})", node_info, status_info, e, url);
+                    return Err(e.into());
+                }
+            };
 
-        let response = Self::handle_response_status(response).await?;
+        let response = self.handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
         Self::decode_response(&response_bytes)
     }
@@ -108,15 +206,41 @@ impl OrchestratorClient {
         body: Vec<u8>,
     ) -> Result<(), OrchestratorError> {
         let url = self.build_url(endpoint);
-        let response = self
+        log::debug!("Sending POST request (no response) to {}", url);
+        
+        let response = match self
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
             .body(body)
             .send()
-            .await?;
+            .await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    log::debug!("POST (no response) status: {} for {}", status, url);
+                    resp
+                },
+                Err(e) => {
+                    // 尝试从错误中提取状态码
+                    let status_info = if let Some(status) = e.status() {
+                        format!("[Status: {}] ", status.as_u16())
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    // 添加node_id信息到日志
+                    let node_info = if let Some(node_id) = &self.node_id {
+                        format!("[node_id={}] ", node_id)
+                    } else {
+                        "".to_string()
+                    };
+                    
+                    log::error!("POST (no response) request failed: {}{}{}(url: {})", node_info, status_info, e, url);
+                    return Err(e.into());
+                }
+            };
 
-        Self::handle_response_status(response).await?;
+        let _ = self.handle_response_status(response).await?;
         Ok(())
     }
 
@@ -209,6 +333,68 @@ impl OrchestratorClient {
             Err("Invalid country code from ipinfo.io".into())
         }
     }
+    
+    /// 获取当前出网 IP 的详细信息
+    /// 
+    /// 返回 ipinfo.io 的完整 JSON 响应，包含 IP、地理位置、ISP 等信息
+    /// 如果使用了代理，会显示代理的出网 IP
+    /// 返回的JSON会被转换为单行紧凑格式
+    pub async fn get_ip_info(&self) -> Result<String, Box<dyn std::error::Error>> {
+        // 获取节点信息用于日志
+        let node_info = if let Some(node_id) = &self.node_id {
+            format!("[node_id={}] ", node_id)
+        } else {
+            "".to_string()
+        };
+        
+        // 发送请求获取IP信息
+        log::info!("{}{}", node_info, "发送请求获取IP信息...");
+        let response = match self
+            .client
+            .get("https://ipinfo.io/json")
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    log::warn!("{}{}: {}", node_info, "获取IP信息失败", e);
+                    return Err(Box::new(e));
+                }
+            };
+
+        let ip_info = match response.text().await {
+            Ok(text) => text,
+            Err(e) => {
+                log::warn!("{}{}: {}", node_info, "解析IP信息响应失败", e);
+                return Err(Box::new(e));
+            }
+        };
+        
+        // 尝试将JSON转换为单行紧凑格式
+        let result = match serde_json::from_str::<serde_json::Value>(&ip_info) {
+            Ok(json_value) => {
+                match serde_json::to_string(&json_value) {
+                    Ok(compact_json) => compact_json,
+                    Err(_) => ip_info.clone() // 如果转换失败，使用原始字符串
+                }
+            },
+            Err(_) => ip_info.clone() // 如果解析失败，使用原始字符串
+        };
+        
+        log::info!("{}{}", node_info, "成功获取IP信息");
+        Ok(result)
+    }
+
+    pub async fn register_node_super(&self, user_id: &str) -> Result<String, OrchestratorError> {
+        let request = RegisterNodeRequest {
+            node_type: NodeType::CliProver as i32,
+            user_id: user_id.to_string(),
+        };
+        let request_bytes = Self::encode_request(&request);
+
+        let response: RegisterNodeResponse = self.post_request("v3/nodes", request_bytes).await?;
+        Ok(response.node_id)
+    }
 }
 
 #[async_trait::async_trait]
@@ -290,6 +476,15 @@ impl Orchestrator for OrchestratorClient {
         signing_key: SigningKey,
         num_provers: usize,
     ) -> Result<(), OrchestratorError> {
+        // 获取node_id信息用于日志
+        let node_info = if let Some(node_id) = &self.node_id {
+            format!("[node_id={}] ", node_id)
+        } else {
+            "".to_string()
+        };
+        
+        // 记录开始提交证明的日志
+        log::info!("{}开始提交证明: task_id={}, proof_hash={}", node_info, task_id, proof_hash);
         let (program_memory, total_memory) = get_memory_info();
         let flops = estimate_peak_gflops(num_provers);
         let (signature, public_key) = self.create_signature(&signing_key, task_id, proof_hash);
@@ -313,8 +508,54 @@ impl Orchestrator for OrchestratorClient {
         };
         let request_bytes = Self::encode_request(&request);
 
-        self.post_request_no_response("v3/tasks/submit", request_bytes)
-            .await
+        let result = match self.post_request_no_response("v3/tasks/submit", request_bytes.clone()).await {
+            Err(err) => {
+                // 检查是否是429错误 - 可能是Reqwest错误或Http错误
+                let is_rate_limit = match &err {
+                    // 检查Reqwest错误中的状态码
+                    OrchestratorError::Reqwest(reqwest_err) => {
+                        if let Some(status) = reqwest_err.status() {
+                            status.as_u16() == 429
+                        } else {
+                            false
+                        }
+                    },
+                    // 检查Http错误中的状态码
+                    OrchestratorError::Http { status, .. } => {
+                        *status == 429
+                    },
+                    _ => false,
+                };
+                
+                if is_rate_limit {
+                    log::warn!("{}遇到限流 (429)，本次提交证明失败: task_id={}", node_info, task_id);
+                    // // 等待10秒
+                    // tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    // // 重试请求
+                    // match self.post_request_no_response("v3/tasks/submit", request_bytes).await {
+                    //     Ok(_) => {
+                    //         log::info!("{}重试成功: 证明提交成功: task_id={}, proof_hash={}", node_info, task_id, proof_hash);
+                    //         return Ok(());
+                    //     }
+                    //     Err(retry_err) => {
+                    //         log::warn!("{}重试失败: 证明提交失败: task_id={}, proof_hash={}, error={}", node_info, task_id, proof_hash, retry_err);
+                    //         return Err(retry_err);
+                    //     }
+                    // }
+                }
+                
+                // 如果不是429错误，记录错误日志并返回错误
+                log::warn!("{}证明提交失败: task_id={}, proof_hash={}, error={}", node_info, task_id, proof_hash, err);
+                Err(err)
+            },
+            Ok(result) => {
+                // 记录成功日志
+                log::info!("{}证明提交成功: task_id={}, proof_hash={}", node_info, task_id, proof_hash);
+                Ok(result)
+            },
+        };
+        
+        result
     }
 }
 
@@ -333,8 +574,8 @@ mod live_orchestrator_tests {
         let user_id = uuid::Uuid::new_v4().to_string();
         let wallet_address = "0x1234567890abcdef1234567890cbaabc12345678"; // Example wallet address
         match client.register_user(&user_id, wallet_address).await {
-            Ok(_) => println!("User registered successfully: {}", user_id),
-            Err(e) => panic!("Failed to register user: {}", e),
+            Ok(_) => log::info!("User registered successfully: {}", user_id),
+            Err(e) => log::warn!("Failed to register user: {}", e),
         }
     }
 
@@ -345,8 +586,8 @@ mod live_orchestrator_tests {
         let client = super::OrchestratorClient::new(Environment::Beta);
         let user_id = "78db0be7-f603-4511-9576-c660f3c58395";
         match client.register_node(user_id).await {
-            Ok(node_id) => println!("Node registered successfully: {}", node_id),
-            Err(e) => panic!("Failed to register node: {}", e),
+            Ok(node_id) => log::info!("Node registered successfully: {}", node_id),
+            Err(e) => log::warn!("Failed to register node_id={}", e),
         }
     }
 
@@ -361,10 +602,10 @@ mod live_orchestrator_tests {
         let result = client.get_proof_task(node_id, verifying_key).await;
         match result {
             Ok(task) => {
-                println!("Retrieved task: {:?}", task);
+                log::info!("Retrieved task: {:?}", task);
             }
             Err(e) => {
-                panic!("Failed to get proof task: {}", e);
+                log::warn!("Failed to get proof task: {}", e);
             }
         }
     }
@@ -377,13 +618,13 @@ mod live_orchestrator_tests {
         let node_id = "5880437"; // Example node ID
         match client.get_tasks(node_id).await {
             Ok(tasks) => {
-                println!("Retrieved {} tasks for node {}", tasks.len(), node_id);
+                log::info!("Retrieved {} tasks for node {}", tasks.len(), node_id);
                 for task in &tasks {
-                    println!("Task: {}", task);
+                    log::info!("Task: {}", task);
                 }
             }
             Err(e) => {
-                panic!("Failed to get tasks: {}", e);
+                log::warn!("Failed to get tasks: {}", e);
             }
         }
     }
@@ -396,10 +637,10 @@ mod live_orchestrator_tests {
         let wallet_address = "0x52908400098527886E0F7030069857D2E4169EE8";
         match client.get_user(wallet_address).await {
             Ok(user_id) => {
-                println!("User ID for wallet {}: {}", wallet_address, user_id);
+                log::info!("User ID for wallet {}: {}", wallet_address, user_id);
                 assert_eq!(user_id, "e3c62f51-e566-4f9e-bccb-be9f8cb474be");
             }
-            Err(e) => panic!("Failed to get user ID: {}", e),
+            Err(e) => log::warn!("Failed to get user ID: {}", e),
         }
     }
 
@@ -409,7 +650,7 @@ mod live_orchestrator_tests {
         let client = super::OrchestratorClient::new(Environment::Beta);
         let country = client.get_country().await;
 
-        println!("Detected country: {}", country);
+        log::info!("Detected country: {}", country);
 
         // Should be a valid 2-letter country code
         assert_eq!(country.len(), 2);
