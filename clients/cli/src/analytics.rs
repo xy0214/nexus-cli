@@ -158,7 +158,7 @@ pub async fn track_got_task(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -184,7 +184,7 @@ pub async fn track_verification_failed(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -215,7 +215,7 @@ pub async fn track_proof_submission_error(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -239,7 +239,7 @@ pub async fn track_proof_accepted(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -263,6 +263,6 @@ pub async fn track_proof_submission_success(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }

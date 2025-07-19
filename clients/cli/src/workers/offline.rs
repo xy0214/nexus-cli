@@ -123,10 +123,8 @@ pub async fn start_workers(
 
         senders.push(task_sender);
         handles.push(handle);
-
     }
 
-    // 返回发送者和处理程序
     (senders, handles)
 }
 
@@ -246,7 +244,7 @@ async fn track_authenticated_proof_analytics(
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -266,6 +264,6 @@ async fn track_anonymous_proof_analytics(environment: &Environment, client_id: S
         environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }

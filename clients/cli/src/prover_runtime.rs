@@ -73,7 +73,7 @@ pub async fn start_authenticated_workers(
                 environment,
                 client_id,
             )
-            .await;
+                .await;
         })
     };
     join_handles.push(fetch_prover_tasks_handle);
@@ -111,7 +111,7 @@ pub async fn start_authenticated_workers(
         environment,
         client_id,
     )
-    .await;
+        .await;
     join_handles.push(submit_proofs_handle);
 
     (event_receiver, join_handles)
@@ -209,7 +209,7 @@ mod tests {
                 crate::environment::Environment::Production,
                 "test-client-id".to_string(),
             )
-            .await;
+                .await;
         });
 
         // Receive tasks

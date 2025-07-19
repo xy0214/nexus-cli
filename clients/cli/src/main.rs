@@ -18,22 +18,29 @@ mod register;
 pub mod system;
 mod task;
 mod task_cache;
+mod ui;
 mod version_checker;
-
 mod workers;
+
 
 use crate::config::{Config, get_config_path};
 use crate::environment::Environment;
-use crate::orchestrator::OrchestratorClient;
+use crate::orchestrator::{Orchestrator, OrchestratorClient};
 use crate::prover_runtime::{start_anonymous_workers, start_authenticated_workers};
 use crate::register::{register_node, register_user};
 use clap::{ArgAction, Parser, Subcommand};
-
+use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
 use ed25519_dalek::SigningKey;
-use std::fs::File;
+use ratatui::{Terminal, backend::CrosstermBackend};
 use std::{error::Error, io};
-use std::io::BufRead;
 use tokio::sync::broadcast;
+
+use std::fs::File;
+use std::io::BufRead;
 use rand::{distributions::Alphanumeric, Rng};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -70,13 +77,6 @@ enum Command {
         #[arg(long = "max-threads", value_name = "MAX_THREADS")]
         max_threads: Option<u32>,
 
-        /// Custom orchestrator URL (overrides environment setting)
-        #[arg(long = "orchestrator-url", value_name = "URL")]
-        orchestrator_url: Option<String>,
-
-        /// Disable background colors in the dashboard
-        #[arg(long = "no-background-color", action = ArgAction::SetTrue)]
-        no_background_color: bool,
     },
     /// Register a new user
     RegisterUser {
@@ -108,7 +108,7 @@ fn generate_random_session_id() -> String {
     use rand::distributions::Distribution;
     const CHARSET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut rng = rand::thread_rng();
-    let rand_chars: String = (0..16)
+    let rand_chars: String = (0..10)
         .map(|_| {
             let idx = Uniform::from(0..CHARSET.len()).sample(&mut rng);
             CHARSET[idx] as char
@@ -305,7 +305,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         break; // 如果遇到速率限制，跳出循环
                     }
 
-                    match orchestrator_client.register_node_super(&user_id).await {
+                    match orchestrator_client.register_node(&user_id).await {
                         Ok(node_id) => {
                             // 尝试将 node_id 解析为 u64
                             match node_id.parse::<u64>() {
@@ -334,7 +334,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     if !rate_limited {
                         // 添加短暂延迟，避免请求过于频繁
-                        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(1100)).await;
                     }
                 }
             }
@@ -481,9 +481,9 @@ async fn start(
 
     // 创建OrchestratorClient并设置node_id
     let orchestrator_client = if let Some(id) = node_id {
-        OrchestratorClient::new_with_proxy(env, proxy.clone()).with_node_id(id.to_string())
+        OrchestratorClient::new_with_proxy(env.clone(), proxy.clone()).with_node_id(id.to_string())
     } else {
-        OrchestratorClient::new_with_proxy(env, proxy.clone())
+        OrchestratorClient::new_with_proxy(env.clone(), proxy.clone())
     };
 
         // 获取当前出网 IP 信息
@@ -521,7 +521,6 @@ async fn start(
     }
     // 每个node_id只使用一个工作线程，因为我们的设计是一个node_id对应一个线程
     let num_workers: usize = 1;
-
     let (shutdown_sender, _) = broadcast::channel(1); // Only one shutdown signal needed
 
     // Get client_id for analytics - use wallet address from API if available, otherwise "anonymous"
@@ -540,6 +539,7 @@ async fn start(
         // No node_id available, use "anonymous"
         "anonymous".to_string()
     };
+    log::info!("[node_id={}] 获取client_id:{}", node_id.unwrap(), client_id.clone());
 
     let (mut event_receiver, mut join_handles) = match node_id {
         Some(node_id) => {
@@ -552,7 +552,7 @@ async fn start(
                 env.clone(),
                 client_id,
             )
-            .await
+                .await
         }
         None => {
             start_anonymous_workers(num_workers, shutdown_sender.subscribe(), env, client_id).await

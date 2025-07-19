@@ -47,7 +47,9 @@ impl OrchestratorClient {
     }
 
     pub fn new_with_proxy(environment: Environment, proxy: Option<String>) -> Self {
-        let mut builder = ClientBuilder::new().timeout(Duration::from_secs(10));
+        let mut builder = ClientBuilder::new()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(10));
         if let Some(proxy_url) = proxy {
             if let Ok(p) = reqwest::Proxy::all(&proxy_url) {
                 builder = builder.proxy(p);
@@ -296,16 +298,6 @@ impl OrchestratorClient {
         Ok(result)
     }
 
-    pub async fn register_node_super(&self, user_id: &str) -> Result<String, OrchestratorError> {
-        let request = RegisterNodeRequest {
-            node_type: NodeType::CliProver as i32,
-            user_id: user_id.to_string(),
-        };
-        let request_bytes = Self::encode_request(&request);
-
-        let response: RegisterNodeResponse = self.post_request("v3/nodes", request_bytes).await?;
-        Ok(response.node_id)
-    }
 }
 
 #[async_trait::async_trait]
@@ -398,6 +390,7 @@ impl Orchestrator for OrchestratorClient {
         };
         // 记录开始提交证明的日志
         log::info!("{}开始提交证明: task_id={}, proof_hash={}", node_info, task_id, proof_hash);
+
         let (program_memory, total_memory) = get_memory_info();
         let flops = estimate_peak_gflops(num_provers);
         let (signature, public_key) = self.create_signature(&signing_key, task_id, proof_hash);

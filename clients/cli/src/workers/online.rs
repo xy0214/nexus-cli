@@ -164,7 +164,7 @@ async fn attempt_task_fetch(
         BATCH_SIZE,
         event_sender,
     );
-    let timeout_duration = Duration::from_secs(60); // 60 second timeout --> 15s todo
+    let timeout_duration = Duration::from_secs(60); // 60 second timeout
 
     match tokio::time::timeout(timeout_duration, fetch_future).await {
         Ok(fetch_result) => match fetch_result {
@@ -180,7 +180,7 @@ async fn attempt_task_fetch(
                     environment,
                     client_id,
                 )
-                .await
+                    .await
             }
             Err(e) => {
                 // Record failed fetch attempt timing
@@ -262,7 +262,7 @@ async fn handle_fetch_success(
         environment,
         client_id,
     )
-    .await?;
+        .await?;
 
     log_fetch_results(added_count, duplicate_count, sender, event_sender, state).await;
     Ok(())
@@ -462,7 +462,7 @@ async fn fetch_task_batch(
         batch_size,
         event_sender,
     )
-    .await
+        .await
 }
 
 /// Try to get existing assigned tasks
@@ -708,7 +708,7 @@ async fn process_proof_submission(
                 environment,
                 client_id,
             )
-            .await;
+                .await;
             Some(true)
         }
         Err(e) => {
