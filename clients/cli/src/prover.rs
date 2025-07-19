@@ -1,5 +1,8 @@
+use crate::analytics::track_verification_failed;
+use crate::environment::Environment;
 use crate::task::Task;
 use log::error;
+use nexus_sdk::Verifiable;
 use nexus_sdk::stwo::seq::Proof;
 use nexus_sdk::{KnownExitCodes, Local, Prover, Viewable, stwo::seq::Stwo};
 use thiserror::Error;
@@ -53,25 +56,73 @@ pub async fn prove_anonymously() -> Result<Proof, ProverError> {
 }
 
 /// Proves a program with a given node ID
-pub async fn authenticated_proving(task: &Task) -> Result<Proof, ProverError> {
+pub async fn authenticated_proving(
+    task: &Task,
+    environment: &Environment,
+    client_id: &str,
+) -> Result<Proof, ProverError> {
     let (view, proof, _) = match task.program_id.as_str() {
         "fast-fib" => {
             // fast-fib uses string inputs
             let input = get_string_public_input(task)?;
             let stwo_prover = get_default_stwo_prover()?;
+            let elf = stwo_prover.elf.clone();
             let (view, proof) = stwo_prover
                 .prove_with_input::<(), u32>(&(), &input)
                 .map_err(|e| ProverError::Stwo(format!("Failed to run fast-fib prover: {}", e)))?;
+            // We should verify the proof before returning it to the server
+            // otherwise, the orchestrator can punish the worker for returning an invalid proof
+            match proof.verify_expected(
+                &input,
+                nexus_sdk::KnownExitCodes::ExitSuccess as u32,
+                &(),
+                &elf,
+                &[],
+            ) {
+                Ok(_) => {
+                    // Track analytics for proof validation success (non-blocking)
+                }
+                Err(e) => {
+                    let error_msg =
+                        format!("Failed to verify proof: {} for inputs: {:?}", e, input);
+                    // Track analytics for verification failure (non-blocking)
+                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
+                        .await;
+                    return Err(ProverError::Stwo(error_msg));
+                }
+            }
             (view, proof, input)
         }
         "fib_input_initial" => {
             let inputs = get_triple_public_input(task)?;
             let stwo_prover = get_initial_stwo_prover()?;
+            let elf = stwo_prover.elf.clone();
             let (view, proof) = stwo_prover
                 .prove_with_input::<(), (u32, u32, u32)>(&(), &inputs)
                 .map_err(|e| {
                     ProverError::Stwo(format!("Failed to run fib_input_initial prover: {}", e))
                 })?;
+            // We should verify the proof before returning it to the server
+            // otherwise, the orchestrator can punish the worker for returning an invalid proof
+            match proof.verify_expected::<(u32, u32, u32), ()>(
+                &inputs, // three u32 inputs
+                nexus_sdk::KnownExitCodes::ExitSuccess as u32,
+                &(),  // no public output
+                &elf, // expected elf (program binary)
+                &[],  // no associated data,
+            ) {
+                Ok(_) => {
+                    // Track analytics for proof validation success (non-blocking)
+                }
+                Err(e) => {
+                    let error_msg =
+                        format!("Failed to verify proof: {} for inputs: {:?}", e, inputs);
+                    // Track analytics for verification failure (non-blocking)
+                    track_verification_failed(task, &error_msg, environment, client_id.to_string())
+                        .await;
+                    return Err(ProverError::Stwo(error_msg));
+                }
+            }
             (view, proof, inputs.0)
         }
         _ => {

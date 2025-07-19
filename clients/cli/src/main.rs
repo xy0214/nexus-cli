@@ -69,6 +69,14 @@ enum Command {
         /// Maximum number of threads to use for proving.
         #[arg(long = "max-threads", value_name = "MAX_THREADS")]
         max_threads: Option<u32>,
+
+        /// Custom orchestrator URL (overrides environment setting)
+        #[arg(long = "orchestrator-url", value_name = "URL")]
+        orchestrator_url: Option<String>,
+
+        /// Disable background colors in the dashboard
+        #[arg(long = "no-background-color", action = ArgAction::SetTrue)]
+        no_background_color: bool,
     },
     /// Register a new user
     RegisterUser {
@@ -464,7 +472,7 @@ async fn start(
                 ),
             )
         })?);
-        log::info!("Read Node ID: {} from config file", node_id.unwrap());
+        log::info!("Read Node ID: {} from config file\n", node_id.unwrap());
     }
 
     // Create a signing key for the prover.
@@ -516,26 +524,21 @@ async fn start(
 
     let (shutdown_sender, _) = broadcast::channel(1); // Only one shutdown signal needed
 
-    // Load config to get client_id for analytics
-    let config_path = get_config_path()?;
-    let client_id = if config_path.exists() {
-        match Config::load_from_file(&config_path) {
-            Ok(config) => {
-                // If user has a node_id, use "cli-{node_id}" format
-                if !config.node_id.is_empty() {
-                    format!("cli-{}", config.node_id)
-                } else if !config.user_id.is_empty() {
-                    // Fallback to user_id if no node_id but user is registered
-                    format!("cli-{}", config.user_id)
-                } else {
-                    // No node_id or user_id - this shouldn't happen with current flow
-                    "anonymous".to_string()
-                }
+    // Get client_id for analytics - use wallet address from API if available, otherwise "anonymous"
+    let client_id = if let Some(node_id) = node_id {
+        match orchestrator_client.get_node(&node_id.to_string()).await {
+            Ok(wallet_address) => {
+                // Use wallet address as client_id for analytics
+                wallet_address
             }
-            Err(_) => "anonymous".to_string(), // Fallback to anonymous
+            Err(_) => {
+                // If API call fails, use "anonymous" regardless of config
+                "anonymous".to_string()
+            }
         }
     } else {
-        "anonymous".to_string() // No config file = anonymous user
+        // No node_id available, use "anonymous"
+        "anonymous".to_string()
     };
 
     let (mut event_receiver, mut join_handles) = match node_id {
@@ -546,7 +549,7 @@ async fn start(
                 orchestrator_client.clone(),
                 num_workers,
                 shutdown_sender.subscribe(),
-                env,
+                env.clone(),
                 client_id,
             )
             .await

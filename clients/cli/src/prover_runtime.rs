@@ -58,6 +58,9 @@ pub async fn start_authenticated_workers(
         let orchestrator = orchestrator.clone();
         let event_sender = event_sender.clone();
         let shutdown = shutdown.resubscribe(); // Clone the receiver for task fetching
+
+        let client_id = client_id.clone();
+        let environment = environment.clone();
         tokio::spawn(async move {
             online::fetch_prover_tasks(
                 node_id,
@@ -67,6 +70,8 @@ pub async fn start_authenticated_workers(
                 event_sender,
                 shutdown,
                 enqueued_tasks,
+                environment,
+                client_id,
             )
             .await;
         })
@@ -81,8 +86,8 @@ pub async fn start_authenticated_workers(
         result_sender,
         event_sender.clone(),
         shutdown.resubscribe(),
-        environment,
-        client_id,
+        environment.clone(),
+        client_id.clone(),
     ).await;
     join_handles.extend(worker_handles);
 
@@ -103,6 +108,8 @@ pub async fn start_authenticated_workers(
         event_sender.clone(),
         shutdown.resubscribe(),
         successful_tasks.clone(),
+        environment,
+        client_id,
     )
     .await;
     join_handles.push(submit_proofs_handle);
@@ -199,6 +206,8 @@ mod tests {
                 event_sender,
                 shutdown_receiver,
                 successful_tasks,
+                crate::environment::Environment::Production,
+                "test-client-id".to_string(),
             )
             .await;
         });

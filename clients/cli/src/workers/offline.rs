@@ -74,6 +74,7 @@ pub async fn start_workers(
         let results_sender = results_sender.clone();
         let mut shutdown_rx = shutdown.resubscribe();
         let client_id = client_id.clone();
+        let environment = environment.clone();
         let error_classifier = ErrorClassifier::new();
         let handle = tokio::spawn(async move {
             loop {
@@ -87,7 +88,7 @@ pub async fn start_workers(
                     }
                     // Check if there are tasks to process
                     Some(task) = task_receiver.recv() => {
-                        match authenticated_proving(&task).await {
+                        match authenticated_proving(&task, &environment, &client_id).await {
                             Ok(proof) => {
                                 let message = format!(
                                     "[Task step 2 of 3] Proof completed successfully (Task ID: {})",
@@ -142,6 +143,7 @@ pub async fn start_anonymous_workers(
         let prover_event_sender = event_sender.clone();
         let mut shutdown_rx = shutdown.resubscribe(); // clone receiver for each worker
         let client_id = client_id.clone();
+        let environment = environment.clone();
         let error_classifier = ErrorClassifier::new();
 
         let handle = tokio::spawn(async move {
@@ -239,7 +241,7 @@ async fn track_authenticated_proof_analytics(
     };
 
     let _ = track(
-        "cli_proof_node_v3".to_string(),
+        vec!["cli_proof_node_v4".to_string(), "proof_node".to_string()],
         analytics_data,
         environment,
         client_id,
@@ -254,7 +256,7 @@ async fn track_anonymous_proof_analytics(environment: &Environment, client_id: S
     let public_input = (9, 1, 1);
 
     let _ = track(
-        "cli_proof_anon_v3".to_string(),
+        vec!["cli_proof_anon_v3".to_string()],
         json!({
             "program_name": "fib_input_initial",
             "public_input": public_input.0,
