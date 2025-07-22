@@ -322,10 +322,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         Err(e) => {
                             // 检查是否是 HTTP 429 错误
                             if let crate::orchestrator::error::OrchestratorError::Http { status, .. } = &e {
-                                if *status == 429 {
-                                    log::warn!("Rate limit exceeded (HTTP 429) for user {}, stopping registration", user_id);
+                                if *status == 429 || *status == 409 {
+                                    log::warn!("Rate limit or conflict (HTTP {}) for user {}, stopping registration", status, user_id);
                                     rate_limited = true;
-                                    break; // 遇到速率限制，立即跳出循环
+                                    break; // 遇到速率限制或冲突，立即跳出循环
                                 }
                             }
                             log::error!("Failed to register node for user {}: {}", user_id, e);
