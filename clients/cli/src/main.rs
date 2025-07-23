@@ -20,14 +20,16 @@ mod task;
 mod task_cache;
 mod ui;
 mod version_checker;
+mod version_requirements;
 mod workers;
-
 
 use crate::config::{Config, get_config_path};
 use crate::environment::Environment;
 use crate::orchestrator::{Orchestrator, OrchestratorClient};
+use crate::pretty::print_cmd_info;
 use crate::prover_runtime::{start_anonymous_workers, start_authenticated_workers};
 use crate::register::{register_node, register_user};
+use crate::version_requirements::{VersionRequirements, VersionRequirementsError};
 use clap::{ArgAction, Parser, Subcommand};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -77,6 +79,13 @@ enum Command {
         #[arg(long = "max-threads", value_name = "MAX_THREADS")]
         max_threads: Option<u32>,
 
+        /// Custom orchestrator URL (overrides environment setting)
+        #[arg(long = "orchestrator-url", value_name = "URL")]
+        orchestrator_url: Option<String>,
+
+        /// Disable background colors in the dashboard
+        #[arg(long = "no-background-color", action = ArgAction::SetTrue)]
+        no_background_color: bool,
     },
     /// Register a new user
     RegisterUser {
@@ -459,7 +468,53 @@ async fn start(
     max_threads: Option<u32>,
     proxy: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
+    // Check version requirements before starting any workers
+    match VersionRequirements::fetch().await {
+        Ok(requirements) => {
+            let current_version = env!("CARGO_PKG_VERSION");
+            match requirements.check_version_constraints(current_version, None, None) {
+                Ok(Some(violation)) => match violation.constraint_type {
+                    crate::version_requirements::ConstraintType::Blocking => {
+                        eprintln!("❌ Version requirement not met: {}", violation.message);
+                        std::process::exit(1);
+                    }
+                    crate::version_requirements::ConstraintType::Warning => {
+                        eprintln!("⚠️  {}", violation.message);
+                    }
+                    crate::version_requirements::ConstraintType::Notice => {
+                        eprintln!("ℹ️  {}", violation.message);
+                    }
+                },
+                Ok(None) => {
+                    // No violations found, continue
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to parse version requirements: {}", e);
+                    eprintln!(
+                        "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+                    );
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(VersionRequirementsError::Fetch(e)) => {
+            eprintln!("❌ Failed to fetch version requirements: {}", e);
+            eprintln!(
+                "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+            );
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to check version requirements: {}", e);
+            eprintln!(
+                "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+            );
+            std::process::exit(1);
+        }
+    }
+
     let mut node_id = node_id;
+
     // If no node ID is provided, try to load it from the config file.
     if node_id.is_none() && config_path.exists() {
         let config = Config::load_from_file(&config_path)?;
