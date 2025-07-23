@@ -468,7 +468,6 @@ async fn start(
                 Ok(Some(violation)) => match violation.constraint_type {
                     crate::version_requirements::ConstraintType::Blocking => {
                         log::info!("❌ Version requirement not met: {}", violation.message);
-                        std::process::exit(1);
                     }
                     crate::version_requirements::ConstraintType::Warning => {
                         log::info!("⚠️  {}", violation.message);
@@ -485,7 +484,6 @@ async fn start(
                     log::error!(
                         "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
                     );
-                    std::process::exit(1);
                 }
             }
         }
@@ -494,14 +492,12 @@ async fn start(
             log::error!(
                 "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
             );
-            std::process::exit(1);
         }
         Err(e) => {
             log::error!("❌ Failed to check version requirements: {}", e);
             log::error!(
                 "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
             );
-            std::process::exit(1);
         }
     }
 
