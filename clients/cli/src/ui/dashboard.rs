@@ -208,7 +208,7 @@ pub fn render_dashboard(f: &mut Frame, state: &DashboardState) {
                 Constraint::Min(0),    // Body area
                 Constraint::Length(2), // Footer block
             ]
-            .as_ref(),
+                .as_ref(),
         )
         .split(f.area());
 

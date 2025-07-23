@@ -1,3 +1,4 @@
+
 pub mod prover {
     // Queue sizes. Chosen to be larger than the tasks API page size (currently, 50)
     pub const TASK_QUEUE_SIZE: usize = 100;

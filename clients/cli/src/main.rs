@@ -78,14 +78,6 @@ enum Command {
         /// Maximum number of threads to use for proving.
         #[arg(long = "max-threads", value_name = "MAX_THREADS")]
         max_threads: Option<u32>,
-
-        /// Custom orchestrator URL (overrides environment setting)
-        #[arg(long = "orchestrator-url", value_name = "URL")]
-        orchestrator_url: Option<String>,
-
-        /// Disable background colors in the dashboard
-        #[arg(long = "no-background-color", action = ArgAction::SetTrue)]
-        no_background_color: bool,
     },
     /// Register a new user
     RegisterUser {
@@ -475,22 +467,22 @@ async fn start(
             match requirements.check_version_constraints(current_version, None, None) {
                 Ok(Some(violation)) => match violation.constraint_type {
                     crate::version_requirements::ConstraintType::Blocking => {
-                        eprintln!("❌ Version requirement not met: {}", violation.message);
+                        log::info!("❌ Version requirement not met: {}", violation.message);
                         std::process::exit(1);
                     }
                     crate::version_requirements::ConstraintType::Warning => {
-                        eprintln!("⚠️  {}", violation.message);
+                        log::info!("⚠️  {}", violation.message);
                     }
                     crate::version_requirements::ConstraintType::Notice => {
-                        eprintln!("ℹ️  {}", violation.message);
+                        log::info!("ℹ️  {}", violation.message);
                     }
                 },
                 Ok(None) => {
                     // No violations found, continue
                 }
                 Err(e) => {
-                    eprintln!("❌ Failed to parse version requirements: {}", e);
-                    eprintln!(
+                    log::error!("❌ Failed to parse version requirements: {}", e);
+                    log::error!(
                         "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
                     );
                     std::process::exit(1);
@@ -498,15 +490,15 @@ async fn start(
             }
         }
         Err(VersionRequirementsError::Fetch(e)) => {
-            eprintln!("❌ Failed to fetch version requirements: {}", e);
-            eprintln!(
+            log::error!("❌ Failed to fetch version requirements: {}", e);
+            log::error!(
                 "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
             );
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("❌ Failed to check version requirements: {}", e);
-            eprintln!(
+            log::error!("❌ Failed to check version requirements: {}", e);
+            log::error!(
                 "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
             );
             std::process::exit(1);
@@ -518,16 +510,34 @@ async fn start(
     // If no node ID is provided, try to load it from the config file.
     if node_id.is_none() && config_path.exists() {
         let config = Config::load_from_file(&config_path)?;
-        node_id = Some(config.node_id.parse::<u64>().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!(
-                    "Failed to parse node_id {:?} from the config file as a u64: {}",
-                    config.node_id, e
-                ),
-            )
-        })?);
-        log::info!("Read Node ID: {} from config file\n", node_id.unwrap());
+
+        // Check if user is registered but node_id is missing or invalid
+        if !config.user_id.is_empty() {
+            if config.node_id.is_empty() {
+                log::warn!("✅ User registered, but no node found. Please register a node to continue: nexus-cli register-node");
+                return Err(
+                    "Node registration required. Please run 'nexus-cli register-node' first."
+                        .into(),
+                );
+            }
+
+            match config.node_id.parse::<u64>() {
+                Ok(id) => {
+                    node_id = Some(id);
+                    log::info!("✅ Found Node ID from config file, Node ID: {}", id);
+                }
+                Err(_) => {
+                    log::error!("❌ Invalid node ID in config file. Please register a new node: nexus-cli register-node");
+                    return Err("Invalid node ID in config. Please run 'nexus-cli register-node' to fix this.".into());
+                }
+            }
+        } else {
+            log::error!("❌ No user registration found. Please register your wallet address first: nexus-cli register-user --wallet-address <your-wallet-address>");
+            return Err("User registration required. Please run 'nexus-cli register-user --wallet-address <your-wallet-address>' first.".into());
+        }
+    } else if node_id.is_none() {
+        // No config file exists at all
+        log::info!("Welcome to Nexus CLI! Please register your wallet address to get started: nexus-cli register-user --wallet-address <your-wallet-address>");
     }
 
     // Create a signing key for the prover.

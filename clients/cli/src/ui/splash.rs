@@ -27,7 +27,7 @@ pub fn render_splash(f: &mut Frame) {
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )
-            .into()
+                .into()
         })
         .collect();
 
@@ -42,7 +42,7 @@ pub fn render_splash(f: &mut Frame) {
                 .fg(Color::LightBlue)
                 .add_modifier(Modifier::ITALIC),
         )
-        .into(),
+            .into(),
     );
 
     // Determine the logo height

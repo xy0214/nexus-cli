@@ -260,7 +260,7 @@ pub async fn track_proof_submission_success(
         &environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 
@@ -320,7 +320,7 @@ pub async fn track_authenticated_proof_analytics(
         &environment,
         client_id,
     )
-    .await;
+        .await;
     // TODO: Catch errors and log them
 }
 

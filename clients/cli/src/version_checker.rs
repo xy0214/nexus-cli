@@ -219,7 +219,7 @@ pub async fn version_checker_task(
         shutdown,
         VERSION_CHECK_INTERVAL,
     )
-    .await;
+        .await;
 }
 
 /// Background task that periodically checks for version updates and constraints with configurable interval
@@ -243,7 +243,7 @@ pub async fn version_checker_task_with_interval(
         &mut constraint_state,
         &event_sender,
     )
-    .await;
+        .await;
 
     // After initial check, wait for the interval then check periodically
     let mut last_check = Instant::now();
@@ -470,7 +470,7 @@ mod tests {
                 shutdown_receiver,
                 Duration::from_millis(100), // Short interval for testing
             )
-            .await;
+                .await;
         });
 
         // Wait a bit for the task to run
@@ -528,7 +528,7 @@ mod tests {
                 shutdown_receiver,
                 Duration::from_millis(100), // Short interval for testing
             )
-            .await;
+                .await;
         });
 
         // Wait a bit for the task to run
@@ -584,7 +584,7 @@ mod tests {
                 shutdown_receiver,
                 Duration::from_millis(100), // Short interval for testing
             )
-            .await;
+                .await;
         });
 
         // Wait a bit for the task to run
@@ -640,7 +640,7 @@ mod tests {
                 shutdown_receiver,
                 Duration::from_millis(50), // Very short interval for testing
             )
-            .await;
+                .await;
         });
 
         // Wait for multiple intervals to allow multiple checks
