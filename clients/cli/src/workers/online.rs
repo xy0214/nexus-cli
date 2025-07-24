@@ -76,9 +76,10 @@ impl TaskFetchState {
     }
 
     pub fn increase_backoff_for_error(&mut self) {
+        // * 2 --> * 1
         self.backoff_duration = std::cmp::min(
-            self.backoff_duration * 2,
-            Duration::from_millis(BACKOFF_DURATION * 2),
+            self.backoff_duration * 1,
+            Duration::from_millis(BACKOFF_DURATION * 1),
         );
     }
 }
@@ -163,7 +164,7 @@ async fn attempt_task_fetch(
         BATCH_SIZE,
         event_sender,
     );
-    let timeout_duration = Duration::from_secs(60); // 60 second timeout
+    let timeout_duration = Duration::from_secs(30); // 60 second timeout --> 30s
 
     match tokio::time::timeout(timeout_duration, fetch_future).await {
         Ok(fetch_result) => match fetch_result {
