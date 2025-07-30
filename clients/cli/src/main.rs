@@ -366,8 +366,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut handles = Vec::new();
 
             // 计算启动多个节点所需的总时间（以毫秒为单位）
-            // 目标：5分钟内启动所有节点
-            let total_time_ms = 300 * 1000;
+            // 目标：15分钟内启动所有节点
+            let total_time_ms = 900 * 1000;
 
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
@@ -376,16 +376,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // 动态调整延迟区间
             let (min_delay, max_delay, total_time_ms, delay_desc) = if num_nodes <= 1 {
                 (0, 0, 0, "无需延迟".to_string())
-            } else if num_nodes <= 200 {
+            } else if num_nodes <= 500 {
                 // 少量节点时，直接用2~5s的随机延迟
                 (2000, 5000, 0, "每节点延迟2~5s".to_string())
             } else {
-                // 大量节点时，5分钟内均匀分配，且每次最小不少于100ms
-                let total_time_ms = 300 * 1000;
+                // 大量节点时，15分钟内均匀分配，且每次最小不少于100ms
+                let total_time_ms = 900 * 1000;
                 let min_delay = ((total_time_ms as f64 * 0.9) / (num_nodes as f64 - 1.0)) as u64;
                 let min_delay = min_delay.max(100);
                 let max_delay = (min_delay as f64 * 1.5) as u64;
-                (min_delay, max_delay, total_time_ms, format!("预计在5分钟内完成（节点启动间隔: {}-{}ms）", min_delay, max_delay))
+                (min_delay, max_delay, total_time_ms, format!("预计在15分钟内完成（节点启动间隔: {}-{}ms）", min_delay, max_delay))
             };
             log::info!("开始启动 {} 个节点，{}", num_nodes, delay_desc);
 
@@ -465,45 +465,45 @@ async fn start(
     proxy: Option<String>,
 ) -> Result<(), Box<dyn Error>> {
     // Check version requirements before starting any workers
-    match VersionRequirements::fetch().await {
-        Ok(requirements) => {
-            let current_version = env!("CARGO_PKG_VERSION");
-            match requirements.check_version_constraints(current_version, None, None) {
-                Ok(Some(violation)) => match violation.constraint_type {
-                    crate::version_requirements::ConstraintType::Blocking => {
-                        log::info!("❌ Version requirement not met: {}", violation.message);
-                    }
-                    crate::version_requirements::ConstraintType::Warning => {
-                        log::info!("⚠️  {}", violation.message);
-                    }
-                    crate::version_requirements::ConstraintType::Notice => {
-                        log::info!("ℹ️  {}", violation.message);
-                    }
-                },
-                Ok(None) => {
-                    // No violations found, continue
-                }
-                Err(e) => {
-                    log::error!("❌ Failed to parse version requirements: {}", e);
-                    log::error!(
-                        "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-                    );
-                }
-            }
-        }
-        Err(VersionRequirementsError::Fetch(e)) => {
-            log::error!("❌ Failed to fetch version requirements: {}", e);
-            log::error!(
-                "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-            );
-        }
-        Err(e) => {
-            log::error!("❌ Failed to check version requirements: {}", e);
-            log::error!(
-                "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-            );
-        }
-    }
+    // match VersionRequirements::fetch().await {
+    //     Ok(requirements) => {
+    //         let current_version = env!("CARGO_PKG_VERSION");
+    //         match requirements.check_version_constraints(current_version, None, None) {
+    //             Ok(Some(violation)) => match violation.constraint_type {
+    //                 crate::version_requirements::ConstraintType::Blocking => {
+    //                     log::info!("❌ Version requirement not met: {}", violation.message);
+    //                 }
+    //                 crate::version_requirements::ConstraintType::Warning => {
+    //                     log::info!("⚠️  {}", violation.message);
+    //                 }
+    //                 crate::version_requirements::ConstraintType::Notice => {
+    //                     log::info!("ℹ️  {}", violation.message);
+    //                 }
+    //             },
+    //             Ok(None) => {
+    //                 // No violations found, continue
+    //             }
+    //             Err(e) => {
+    //                 log::error!("❌ Failed to parse version requirements: {}", e);
+    //                 log::error!(
+    //                     "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+    //                 );
+    //             }
+    //         }
+    //     }
+    //     Err(VersionRequirementsError::Fetch(e)) => {
+    //         log::error!("❌ Failed to fetch version requirements: {}", e);
+    //         log::error!(
+    //             "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+    //         );
+    //     }
+    //     Err(e) => {
+    //         log::error!("❌ Failed to check version requirements: {}", e);
+    //         log::error!(
+    //             "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
+    //         );
+    //     }
+    // }
 
     let mut node_id = node_id;
 
