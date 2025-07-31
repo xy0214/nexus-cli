@@ -34,6 +34,7 @@ incremental = true
 
 [dependencies]
 env_logger = "0.11"
+rlimit = "0.10"
 async-trait = "0.1.88"
 cfg-if = "1.0"
 chrono = "0.4.38"

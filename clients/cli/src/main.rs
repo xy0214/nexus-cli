@@ -45,6 +45,7 @@ use std::fs::File;
 use std::io::BufRead;
 use rand::{distributions::Alphanumeric, Rng};
 use std::time::{SystemTime, UNIX_EPOCH};
+use rlimit::{getrlimit, Resource};
 
 // 包装start函数，处理错误日志记录
 async fn start_node_wrapper(node_id: u64, env: Environment, config_path: std::path::PathBuf,
@@ -371,6 +372,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
+            log::info!("Open file limit: {:?}", rlimit::getrlimit(rlimit::Resource::NOFILE));
             log::info!("共找到 {} 个节点需要启动", num_nodes);
 
             // 动态调整延迟区间

@@ -265,7 +265,7 @@ impl OrchestratorClient {
         let response = match self
             .client
             .get("https://ipinfo.io/json")
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(3))
             .send()
             .await {
                 Ok(resp) => resp,
