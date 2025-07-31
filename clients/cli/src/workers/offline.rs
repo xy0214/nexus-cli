@@ -83,7 +83,7 @@ pub async fn start_workers(
 
         let handle = tokio::spawn(async move {
             loop {
-                let lock_duration = Duration::from_secs(rand::thread_rng().gen_range(1..=5));
+                let lock_duration = Duration::from_secs(rand::thread_rng().gen_range(1..=10));
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
                         let message = format!("Worker {} received shutdown signal", worker_id);

@@ -32,7 +32,7 @@ pub static GLOBAL_PROVER_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .filter(|&v| v > 0)
-        .unwrap_or(8);
+        .unwrap_or(4);
     Arc::new(Semaphore::new(concurrency))
 });
 

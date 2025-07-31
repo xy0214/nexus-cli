@@ -14,10 +14,10 @@ pub mod prover {
     pub const TASK_QUEUE_SIZE: usize = 1;
 
     /// Maximum number of events that can be queued for UI updates
-    pub const EVENT_QUEUE_SIZE: usize = 100;
+    pub const EVENT_QUEUE_SIZE: usize = 20;
 
     /// Maximum number of proof results that can be queued for submission
-    pub const RESULT_QUEUE_SIZE: usize = 100;
+    pub const RESULT_QUEUE_SIZE: usize = 20;
 
     // =============================================================================
     // TASK FETCHING BEHAVIOR
@@ -47,7 +47,7 @@ pub mod prover {
     /// Duration to keep task IDs in duplicate-prevention cache (milliseconds)
     /// Long enough to prevent immediate re-processing, short enough to allow
     /// eventual retry of legitimately failed tasks
-    pub const CACHE_EXPIRATION: u64 = 300_000; // 5 minutes
+    pub const CACHE_EXPIRATION: u64 = 120_000; // 2 minutes
 
     // =============================================================================
     // COMPUTED CONSTANTS
@@ -55,5 +55,5 @@ pub mod prover {
 
     /// Maximum number of completed tasks to track (prevents memory growth)
     /// Set to 5x the task queue size to provide adequate duplicate detection
-    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 5;  // 5 -- > 5
+    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 2;  // 5 -- > 5
 }
