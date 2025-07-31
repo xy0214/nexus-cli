@@ -4,8 +4,8 @@
 
 use crate::environment::Environment;
 use crate::nexus_orchestrator::{
-    GetProofTaskRequest, GetProofTaskResponse, GetTasksResponse, NodeType, RegisterNodeRequest,
-    RegisterNodeResponse, RegisterUserRequest, SubmitProofRequest, TaskDifficulty, UserResponse,
+    GetProofTaskRequest, GetProofTaskResponse, NodeType, RegisterNodeRequest, RegisterNodeResponse,
+    RegisterUserRequest, SubmitProofRequest, TaskDifficulty, UserResponse,
 };
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::error::OrchestratorError;
@@ -17,10 +17,18 @@ use reqwest::{Client, ClientBuilder, Response};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+// Build timestamp in milliseconds since epoch
+static BUILD_TIMESTAMP: &str = match option_env!("BUILD_TIMESTAMP") {
+    Some(timestamp) => timestamp,
+    None => "Build timestamp not available",
+};
+
+// User-Agent string with CLI version
+const USER_AGENT: &str = concat!("nexus-cli/", env!("CARGO_PKG_VERSION"));
 
 // Privacy-preserving country detection for network optimization.
 // Only stores 2-letter country codes (e.g., "US", "CA", "GB") to help route
-// to the closest server. This improves network latency and reliability.
+// requests to the nearest Nexus network servers for better performance.
 // No precise location, IP addresses, or personal data is collected or stored.
 static COUNTRY_CODE: OnceLock<String> = OnceLock::new();
 
@@ -114,7 +122,13 @@ impl OrchestratorClient {
         endpoint: &str,
     ) -> Result<T, OrchestratorError> {
         let url = self.build_url(endpoint);
-        let response = self.client.get(&url).send().await?;
+        let response = self
+            .client
+            .get(&url)
+            .header("User-Agent", USER_AGENT)
+            .header("X-Build-Timestamp", BUILD_TIMESTAMP)
+            .send()
+            .await?;
 
         let response = self.handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
@@ -131,6 +145,8 @@ impl OrchestratorClient {
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
+            .header("User-Agent", USER_AGENT)
+            .header("X-Build-Timestamp", BUILD_TIMESTAMP)
             .body(body)
             .send()
             .await?;
@@ -150,6 +166,8 @@ impl OrchestratorClient {
             .client
             .post(&url)
             .header("Content-Type", "application/octet-stream")
+            .header("User-Agent", USER_AGENT)
+            .header("X-Build-Timestamp", BUILD_TIMESTAMP)
             .body(body)
             .send()
             .await?;
@@ -310,7 +328,6 @@ impl Orchestrator for OrchestratorClient {
     async fn get_user(&self, wallet_address: &str) -> Result<String, OrchestratorError> {
         let wallet_path = urlencoding::encode(wallet_address).into_owned();
         let endpoint = format!("v3/users/{}", wallet_path);
-
         let user_response: UserResponse = self.get_request(&endpoint).await?;
         Ok(user_response.user_id)
     }
@@ -326,7 +343,6 @@ impl Orchestrator for OrchestratorClient {
             wallet_address: wallet_address.to_string(),
         };
         let request_bytes = Self::encode_request(&request);
-
         self.post_request_no_response("v3/users", request_bytes)
             .await
     }
@@ -338,7 +354,6 @@ impl Orchestrator for OrchestratorClient {
             user_id: user_id.to_string(),
         };
         let request_bytes = Self::encode_request(&request);
-
         let response: RegisterNodeResponse = self.post_request("v3/nodes", request_bytes).await?;
         Ok(response.node_id)
     }
@@ -346,16 +361,9 @@ impl Orchestrator for OrchestratorClient {
     /// Get the wallet address associated with a node ID.
     async fn get_node(&self, node_id: &str) -> Result<String, OrchestratorError> {
         let endpoint = format!("v3/nodes/{}", node_id);
-
         let node_response: crate::nexus_orchestrator::GetNodeResponse =
             self.get_request(&endpoint).await?;
         Ok(node_response.wallet_address)
-    }
-
-    async fn get_tasks(&self, node_id: &str) -> Result<Vec<Task>, OrchestratorError> {
-        let response: GetTasksResponse = self.get_request(&format!("v3/tasks/{}", node_id)).await?;
-        let tasks = response.tasks.iter().map(Task::from).collect();
-        Ok(tasks)
     }
 
     async fn get_proof_task(
@@ -370,7 +378,6 @@ impl Orchestrator for OrchestratorClient {
             max_difficulty: TaskDifficulty::Large as i32,
         };
         let request_bytes = Self::encode_request(&request);
-
         let response: GetProofTaskResponse = self.post_request("v3/tasks", request_bytes).await?;
         Ok(Task::from(&response))
     }
@@ -422,8 +429,7 @@ impl Orchestrator for OrchestratorClient {
             signature,
         };
         let request_bytes = Self::encode_request(&request);
-
-        let result = match self.post_request_no_response("v3/tasks/submit", request_bytes.clone()).await {
+        let result = match self.post_request_no_response("v3/tasks/submit", request_bytes).await {
             Err(err) => {
                 // 检查是否是429错误 - 可能是Reqwest错误或Http错误
                 let is_rate_limit = match &err {
@@ -505,23 +511,6 @@ mod live_orchestrator_tests {
                 println!("Got proof task: {}", task);
             }
             Err(e) => panic!("Failed to get proof task: {}", e),
-        }
-    }
-
-    #[tokio::test]
-    #[ignore] // This test requires a live orchestrator instance.
-    /// Should return the list of tasks for the node.
-    async fn test_get_tasks() {
-        let client = super::OrchestratorClient::new(Environment::Production);
-        let node_id = "5880437"; // Example node ID
-        match client.get_tasks(node_id).await {
-            Ok(tasks) => {
-                println!("Got {} tasks", tasks.len());
-                for task in tasks {
-                    println!("Task: {}", task);
-                }
-            }
-            Err(e) => panic!("Failed to get tasks: {}", e),
         }
     }
 
