@@ -33,7 +33,7 @@ pub mod prover {
 
     /// Default backoff duration when retrying failed operations (milliseconds)
     /// Set to 2 minutes to balance responsiveness with server load
-    pub const BACKOFF_DURATION: u64 = 120_000; // 2 minutes
+    pub const BACKOFF_DURATION: u64 = 60_000; // 2 minutes -- > 1 minutes
 
     /// How often to log queue status information (milliseconds)
     /// Provides regular status updates without spamming logs
@@ -54,5 +54,5 @@ pub mod prover {
 
     /// Maximum number of completed tasks to track (prevents memory growth)
     /// Set to 5x the task queue size to provide adequate duplicate detection
-    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 5;
+    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 50;  // 5 -- > 50
 }
