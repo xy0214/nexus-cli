@@ -591,6 +591,7 @@ async fn start(
     let (shutdown_sender, _) = broadcast::channel(1); // Only one shutdown signal needed
 
     // Get client_id for analytics - use wallet address from API if available, otherwise "anonymous"
+    log::info!("[node_id={}] 准备获取client_id", node_id.unwrap());
     let client_id = if let Some(node_id) = node_id {
         match orchestrator_client.get_node(&node_id.to_string()).await {
             Ok(wallet_address) => {
