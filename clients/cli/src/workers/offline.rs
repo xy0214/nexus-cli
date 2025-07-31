@@ -55,6 +55,10 @@ pub fn start_dispatcher(
 /// A tuple containing:
 /// * A vector of `Sender<Task>` for each worker, allowing tasks to be sent to them.
 /// * A vector of `JoinHandle<()>` for each worker, allowing the main thread to await their completion.
+use std::sync::Arc;
+use rand::Rng;
+use tokio::sync::Semaphore;
+
 pub async fn start_workers(
     num_workers: usize,
     results_sender: mpsc::Sender<(Task, ProofResult)>,
@@ -62,6 +66,7 @@ pub async fn start_workers(
     shutdown: broadcast::Receiver<()>,
     environment: Environment,
     client_id: String,
+    semaphore: Arc<Semaphore>, // 新增参数
 ) -> (Vec<mpsc::Sender<Task>>, Vec<JoinHandle<()>>) {
     let mut senders = Vec::new();
     let mut handles = Vec::new();
@@ -74,9 +79,11 @@ pub async fn start_workers(
         let client_id = client_id.clone();
         let environment = environment.clone();
         let error_classifier = ErrorClassifier::new();
+        let semaphore = semaphore.clone();
 
         let handle = tokio::spawn(async move {
             loop {
+                let lock_duration = Duration::from_secs(rand::thread_rng().gen_range(1..=5));
                 tokio::select! {
                     _ = shutdown_rx.recv() => {
                         let message = format!("Worker {} received shutdown signal", worker_id);
@@ -87,36 +94,50 @@ pub async fn start_workers(
                     }
                     // Check if there are tasks to process
                     Some(task) = task_receiver.recv() => {
-                        match authenticated_proving(&task, &environment, &client_id, Some(&prover_event_sender)).await {
-                            Ok((proof, combined_hash)) => {
-                                let message = format!(
-                                    "[Task step 2 of 3] Proof completed successfully (Task ID: {})",
-                                    task.task_id
-                                );
-                                let _ = prover_event_sender
-                                    .send(Event::prover(worker_id, message, EventType::Success))
-                                    .await;
+                        // 信号量限流，超时3秒拿不到 permit 就跳过本次task
+                        match tokio::time::timeout(lock_duration, semaphore.acquire()).await {
+                            Ok(permit) => {
+                                let _permit = permit.unwrap();
+                                let acquire_message = format!("[Worker {}] 抢到锁准备计算 (Task ID: {}), lock_duration:{:?}", worker_id, task.task_id, lock_duration);
+                                let _log1 = prover_event_sender.send(Event::prover(worker_id, acquire_message, EventType::Success)).await;
+                                match authenticated_proving(&task, &environment, &client_id, Some(&prover_event_sender)).await {
+                                    Ok((proof, combined_hash)) => {
+                                        let message = format!(
+                                            "[Task step 2 of 3] Proof completed successfully (Task ID: {})",
+                                            task.task_id
+                                        );
+                                        let _ = prover_event_sender
+                                            .send(Event::prover(worker_id, message, EventType::Success))
+                                            .await;
 
-                                // Track analytics for successful proof (non-blocking)
-                                tokio::spawn(track_authenticated_proof_analytics(task.clone(), environment.clone(), client_id.clone()));
+                                        // Track analytics for successful proof (non-blocking)
+                                        tokio::spawn(track_authenticated_proof_analytics(task.clone(), environment.clone(), client_id.clone()));
 
-                                // Send the proof result to the results channel
-                                let proof_result = ProofResult {
-                                    proof,
-                                    combined_hash,
-                                };
-                                let _ = results_sender.send((task, proof_result)).await;
-                            }
-                            Err(e) => {
-                                let log_level = error_classifier.classify_worker_error(&e);
-                                let message = format!("Error: {}", e);
-                                let event = Event::prover_with_level(worker_id, message, EventType::Error, log_level);
-                                if event.should_display() {
-                                    let _ = prover_event_sender.send(event).await;
+                                        // Send the proof result to the results channel
+                                        let proof_result = ProofResult {
+                                            proof,
+                                            combined_hash,
+                                        };
+                                        let _ = results_sender.send((task, proof_result)).await;
+                                    }
+                                    Err(e) => {
+                                        let log_level = error_classifier.classify_worker_error(&e);
+                                        let message = format!("Error: {}", e);
+                                        let event = Event::prover_with_level(worker_id, message, EventType::Error, log_level);
+                                        if event.should_display() {
+                                            let _ = prover_event_sender.send(event).await;
+                                        }
+
+                                        // For analytics errors, continue processing but don't send result
+                                        // For other errors, also don't send result (task failed)
+                                    }
                                 }
-
-                                // For analytics errors, continue processing but don't send result
-                                // For other errors, also don't send result (task failed)
+                            }
+                            Err(_) => {
+                                // 超时未获得信号量，跳过本次task
+                                let message = format!("[Worker {}] Semaphore acquire timeout, skip task {}, lock_duration:{:?}", worker_id, task.task_id, lock_duration);
+                                let _ = prover_event_sender.send(Event::prover(worker_id, message, EventType::Error)).await;
+                                // 不执行 authenticated_proving
                             }
                         }
                     }

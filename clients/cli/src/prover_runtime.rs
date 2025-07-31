@@ -17,6 +17,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 /// Starts authenticated workers that fetch tasks from the orchestrator and process them.
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+
 pub async fn start_authenticated_workers(
     node_id: u64,
     signing_key: SigningKey,
@@ -25,6 +28,7 @@ pub async fn start_authenticated_workers(
     shutdown: broadcast::Receiver<()>,
     environment: Environment,
     client_id: String,
+    semaphore: Arc<Semaphore>, // 新增参数
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
     // 确保orchestrator客户端设置了node_id
     if orchestrator.get_node_id().is_none() {
@@ -35,16 +39,17 @@ pub async fn start_authenticated_workers(
     let (event_sender, event_receiver) =
         mpsc::channel::<Event>(crate::consts::prover::EVENT_QUEUE_SIZE);
 
+    // todo 去掉版本check
     // Start version checker
-    let version_checker_handle = {
-        let current_version = env!("CARGO_PKG_VERSION").to_string();
-        let event_sender = event_sender.clone();
-        let shutdown = shutdown.resubscribe();
-        tokio::spawn(async move {
-            start_version_checker_task(current_version, event_sender, shutdown).await;
-        })
-    };
-    join_handles.push(version_checker_handle);
+    // let version_checker_handle = {
+    //     let current_version = env!("CARGO_PKG_VERSION").to_string();
+    //     let event_sender = event_sender.clone();
+    //     let shutdown = shutdown.resubscribe();
+    //     tokio::spawn(async move {
+    //         start_version_checker_task(current_version, event_sender, shutdown).await;
+    //     })
+    // };
+    // join_handles.push(version_checker_handle);
 
     // A bounded list of recently fetched task IDs (prevents refetching currently processing tasks)
     let enqueued_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
@@ -88,6 +93,7 @@ pub async fn start_authenticated_workers(
         shutdown.resubscribe(),
         environment.clone(),
         client_id.clone(),
+        semaphore.clone(), // 新增参数
     ).await;
     join_handles.extend(worker_handles);
 

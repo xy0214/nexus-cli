@@ -16,6 +16,10 @@ use prost::Message;
 use reqwest::{Client, ClientBuilder, Response};
 use std::sync::OnceLock;
 use std::time::Duration;
+use tokio::time;
+use serde_json::Value;
+use std::error::Error;
+
 
 // Build timestamp in milliseconds since epoch
 static BUILD_TIMESTAMP: &str = match option_env!("BUILD_TIMESTAMP") {
@@ -45,6 +49,7 @@ impl OrchestratorClient {
     pub fn new(environment: Environment) -> Self {
         Self {
             client: ClientBuilder::new()
+                .danger_accept_invalid_certs(true)
                 .connect_timeout(Duration::from_secs(10))
                 .timeout(Duration::from_secs(10))
                 .build()
@@ -56,6 +61,7 @@ impl OrchestratorClient {
 
     pub fn new_with_proxy(environment: Environment, proxy: Option<String>) -> Self {
         let mut builder = ClientBuilder::new()
+            .danger_accept_invalid_certs(true)
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(10));
         if let Some(proxy_url) = proxy {
@@ -121,6 +127,11 @@ impl OrchestratorClient {
         &self,
         endpoint: &str,
     ) -> Result<T, OrchestratorError> {
+        let node_info = if let Some(node_id) = &self.node_id {
+            format!("[node_id={}] ", node_id)
+        } else {
+            "".to_string()
+        };
         let url = self.build_url(endpoint);
         let response = self
             .client
@@ -128,7 +139,17 @@ impl OrchestratorClient {
             .header("User-Agent", USER_AGENT)
             .header("X-Build-Timestamp", BUILD_TIMESTAMP)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                let err_msg = format!("{}", e); // 转为字符串
+                let first_five_lines: String = err_msg
+                    .lines()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                log::info!("{} get_request failed (first 5 lines):\n{} (url: {})", node_info, first_five_lines, url);
+                e
+            })?;
 
         let response = self.handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
@@ -140,6 +161,11 @@ impl OrchestratorClient {
         endpoint: &str,
         body: Vec<u8>,
     ) -> Result<T, OrchestratorError> {
+        let node_info = if let Some(node_id) = &self.node_id {
+            format!("[node_id={}] ", node_id)
+        } else {
+            "".to_string()
+        };
         let url = self.build_url(endpoint);
         let response = self
             .client
@@ -149,7 +175,17 @@ impl OrchestratorClient {
             .header("X-Build-Timestamp", BUILD_TIMESTAMP)
             .body(body)
             .send()
-            .await?;
+            .await
+            .map_err(|e| {
+                let err_msg = format!("{}", e); // 转为字符串
+                let first_five_lines: String = err_msg
+                    .lines()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                log::info!("{} get_request failed (first 5 lines):\n{} (url: {})", node_info, first_five_lines, url);
+                e
+            })?;
 
         let response = self.handle_response_status(response).await?;
         let response_bytes = response.bytes().await?;
@@ -271,45 +307,48 @@ impl OrchestratorClient {
     /// 返回 ipinfo.io 的完整 JSON 响应，包含 IP、地理位置、ISP 等信息
     /// 如果使用了代理，会显示代理的出网 IP
     /// 返回的JSON会被转换为单行紧凑格式
-    pub async fn get_ip_info(&self) -> Result<String, Box<dyn std::error::Error>> {
-        // 获取节点信息用于日志
+    pub async fn get_ip_info(&self) -> Result<String, Box<dyn Error>> {
         let node_info = if let Some(node_id) = &self.node_id {
             format!("[node_id={}] ", node_id)
         } else {
             "".to_string()
         };
-        // 发送请求获取IP信息
+
         log::info!("{}{}", node_info, "发送请求获取IP信息...");
-        let response = match self
-            .client
-            .get("https://ipinfo.io/json")
-            .timeout(Duration::from_secs(3))
-            .send()
-            .await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    log::warn!("{}{}: {}", node_info, "获取IP信息失败", e);
-                    return Err(Box::new(e));
-                }
-            };
+
+        let result = time::timeout(Duration::from_secs(3), async {
+            self.client
+                .get("https://ipinfo.io/json")
+                .send()
+                .await
+        }).await;
+
+        let response = match result {
+            Ok(Ok(resp)) => resp,
+            Ok(Err(e)) => {
+                log::warn!("{}请求失败: {}", node_info, e);
+                return Err(Box::new(e));
+            }
+            Err(_) => {
+                log::warn!("{}请求超时", node_info);
+                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout")));
+            }
+        };
 
         let ip_info = match response.text().await {
             Ok(text) => text,
             Err(e) => {
-                log::warn!("{}{}: {}", node_info, "解析IP信息响应失败", e);
+                log::warn!("{}解析响应文本失败: {}", node_info, e);
                 return Err(Box::new(e));
             }
         };
 
-        // 尝试将JSON转换为单行紧凑格式
-        let result = match serde_json::from_str::<serde_json::Value>(&ip_info) {
-            Ok(json_value) => {
-                match serde_json::to_string(&json_value) {
-                    Ok(compact_json) => compact_json,
-                    Err(_) => ip_info.clone() // 如果转换失败，使用原始字符串
-                }
+        let result = match serde_json::from_str::<Value>(&ip_info) {
+            Ok(json_value) => match serde_json::to_string(&json_value) {
+                Ok(compact_json) => compact_json,
+                Err(_) => ip_info.clone(),
             },
-            Err(_) => ip_info.clone() // 如果解析失败，使用原始字符串
+            Err(_) => ip_info.clone(),
         };
 
         log::info!("{}{}", node_info, "成功获取IP信息");

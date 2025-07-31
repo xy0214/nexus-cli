@@ -10,7 +10,7 @@ use crate::analytics::{
     track_proof_submission_success,
 };
 use crate::consts::prover::{
-    BACKOFF_DURATION, LOW_WATER_MARK, QUEUE_LOG_INTERVAL, TASK_QUEUE_SIZE,
+    BACKOFF_DURATION, ERR_BACKOFF_DURATION, LOW_WATER_MARK, QUEUE_LOG_INTERVAL, TASK_QUEUE_SIZE,
 };
 use crate::environment::Environment;
 use crate::error_classifier::{ErrorClassifier, LogLevel};
@@ -141,10 +141,9 @@ impl TaskFetchState {
 
     /// Increase backoff duration for error handling (exponential backoff)
     pub fn increase_backoff_for_error(&mut self) {
-        // * 2 --> * 1
         self.backoff_duration = std::cmp::min(
             self.backoff_duration * 1,
-            Duration::from_millis(BACKOFF_DURATION * 1),
+            Duration::from_millis(ERR_BACKOFF_DURATION * 1),
         );
     }
 }
@@ -446,7 +445,8 @@ async fn handle_fetch_error(
             )
             .await;
 
-            if let Some(retry_after_seconds) = error.get_retry_after_seconds() {
+            if let Some(retry) = error.get_retry_after_seconds() {
+                let retry_after_seconds = if retry == 0 { 60 } else { retry };
                 state.set_backoff_from_server(retry_after_seconds);
                 send_event(
                     event_sender,

@@ -23,6 +23,19 @@ mod version_checker;
 mod version_requirements;
 mod workers;
 
+use once_cell::sync::Lazy;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
+
+pub static GLOBAL_PROVER_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
+    let concurrency = std::env::var("NEXUS_PROVER_CONCURRENCY")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(8);
+    Arc::new(Semaphore::new(concurrency))
+});
+
 use crate::config::{Config, get_config_path};
 use crate::environment::Environment;
 use crate::orchestrator::{Orchestrator, OrchestratorClient};
@@ -38,19 +51,39 @@ use crossterm::{
 };
 use ed25519_dalek::SigningKey;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use std::{error::Error, io};
+use std::error::Error;
+use std::io;
 use tokio::sync::broadcast;
 
+use rand::{Rng, distributions::Alphanumeric};
+use rlimit::{Resource, getrlimit};
 use std::fs::File;
 use std::io::BufRead;
-use rand::{distributions::Alphanumeric, Rng};
 use std::time::{SystemTime, UNIX_EPOCH};
-use rlimit::{getrlimit, Resource};
 
 // 包装start函数，处理错误日志记录
-async fn start_node_wrapper(node_id: u64, env: Environment, config_path: std::path::PathBuf,
-                          headless: bool, max_threads: Option<u32>, proxy: Option<String>) {
-    if let Err(e) = start(Some(node_id), env, config_path, headless, max_threads, proxy).await {
+async fn start_node_wrapper(
+    node_id: u64,
+    env: Environment,
+    config_path: std::path::PathBuf,
+    headless: bool,
+    max_threads: Option<u32>,
+    proxy: Option<String>,
+    param_client_id: Option<String>,
+    check_out_ip: bool,
+) {
+    if let Err(e) = start(
+        Some(node_id),
+        env,
+        config_path,
+        headless,
+        max_threads,
+        proxy,
+        param_client_id,
+        check_out_ip,
+    )
+    .await
+    {
         log::error!("Error starting node {}: {}", node_id, e);
     }
 }
@@ -96,7 +129,6 @@ enum Command {
     Logout,
 }
 
-
 /// 生成随机session ID，格式为：当前时间戳毫秒 + 10个随机小写字母
 fn generate_random_session_id() -> String {
     // 获取当前时间戳（毫秒）
@@ -106,8 +138,8 @@ fn generate_random_session_id() -> String {
         .as_millis();
 
     // 生成16位数字+大小写字母混合字符串
-    use rand::distributions::Uniform;
     use rand::distributions::Distribution;
+    use rand::distributions::Uniform;
     const CHARSET: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     let mut rng = rand::thread_rng();
     let rand_chars: String = (0..10)
@@ -135,14 +167,20 @@ fn convert_proxy_format(proxy: &str) -> Option<String> {
             let session_id = generate_random_session_id();
             // 替换username中的占位符
             let updated_username = username.replace("{random_session_id}", &session_id);
-            log::info!("替换代理URL的username中的随机session ID: {}", updated_username);
+            log::info!(
+                "替换代理URL的username中的随机session ID: {}",
+                updated_username
+            );
             updated_username
         } else {
             username.to_string()
         };
 
         // ip:port:user:pass => http://user:pass@ip:port
-        Some(format!("http://{}:{}@{}:{}", username_with_session_id, parts[3], parts[0], parts[1]))
+        Some(format!(
+            "http://{}:{}@{}:{}",
+            username_with_session_id, parts[3], parts[0], parts[1]
+        ))
     } else if proxy.starts_with("http://") || proxy.starts_with("https://") {
         Some(proxy.to_string())
     } else {
@@ -150,23 +188,41 @@ fn convert_proxy_format(proxy: &str) -> Option<String> {
     }
 }
 
-fn read_node_id_csv(path: &str) -> io::Result<Vec<(u64, Option<String>)>> {
+fn read_node_id_csv(path: &str) -> io::Result<Vec<(u64, Option<String>, Option<String>)>> {
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
     let mut result = Vec::new();
+
     for (i, line) in reader.lines().enumerate() {
-        // 每次循环同步停顿1毫秒
         std::thread::sleep(std::time::Duration::from_millis(1));
+
         let line = line?;
-        if i == 0 { continue; } // 跳过表头
-        let mut parts = line.splitn(2, ',');
-        let node_id = parts.next().unwrap_or("").trim().parse::<u64>().ok();
-        let proxy = parts.next().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        if i == 0 {
+            continue; // 跳过表头
+        }
+
+        let fields: Vec<&str> = line.split(',').map(|s| s.trim()).collect();
+
+        if fields.is_empty() {
+            continue;
+        }
+
+        let node_id = fields.get(0).and_then(|s| s.parse::<u64>().ok());
+        let proxy = fields
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let wallet_address = fields
+            .get(2)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+
         if let Some(node_id) = node_id {
             let proxy = proxy.and_then(|p| convert_proxy_format(&p));
-            result.push((node_id, proxy));
+            result.push((node_id, proxy, wallet_address));
         }
     }
+
     Ok(result)
 }
 
@@ -175,14 +231,18 @@ fn read_node_id_csv(path: &str) -> io::Result<Vec<(u64, Option<String>)>> {
 /// user_id: 字符串类型，表示用户 ID
 /// node_qty: 整数类型，表示需要创建的节点数量
 /// proxy: 代理服务器地址，格式如 45.38.111.5:5920:pjspqvjc:65ipqktn2z5z
-fn read_register_node_csv(path: &str) -> io::Result<Vec<(String, u32, Option<String>, Option<String>)>> {
+fn read_register_node_csv(
+    path: &str,
+) -> io::Result<Vec<(String, u32, Option<String>, Option<String>)>> {
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
     let mut result = Vec::new();
 
     for (i, line) in reader.lines().enumerate() {
         let line = line?;
-        if i == 0 { continue; } // 跳过表头
+        if i == 0 {
+            continue;
+        } // 跳过表头
 
         let parts: Vec<&str> = line.split(',').collect();
         if parts.len() < 2 {
@@ -266,7 +326,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 return Ok(());
             }
 
-            log::info!("Found {} user entries to register nodes", register_infos.len());
+            log::info!(
+                "Found {} user entries to register nodes",
+                register_infos.len()
+            );
 
             // 创建结果收集器
             let mut results = Vec::new();
@@ -281,7 +344,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 log::info!("Processing user_id: {}, node_qty: {}", user_id, node_qty);
 
                 // 创建 OrchestratorClient 实例，带有可选的代理
-                let orchestrator_client = OrchestratorClient::new_with_proxy(environment.clone(), converted_proxy.clone());
+                let orchestrator_client = OrchestratorClient::new_with_proxy(
+                    environment.clone(),
+                    converted_proxy.clone(),
+                );
                 // 获取当前出网 IP 信息
                 match orchestrator_client.get_ip_info().await {
                     Ok(ip_info) => {
@@ -290,14 +356,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         } else {
                             log::info!("当前出网 IP 信息: {}, 未使用代理", ip_info);
                         }
-                    },
+                    }
                     Err(e) => {
                         if let Some(ref proxy) = converted_proxy {
                             log::warn!("获取 IP 信息失败: {}, 使用代理: {}", e, proxy);
                         } else {
                             log::warn!("获取 IP 信息失败: {}, 未使用代理", e);
                         }
-                    },
+                    }
                 }
 
                 // 为该用户注册指定数量的节点
@@ -312,20 +378,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             // 尝试将 node_id 解析为 u64
                             match node_id.parse::<u64>() {
                                 Ok(node_id_u64) => {
-                                    log::info!("Successfully registered node {} for user {}", node_id_u64, user_id);
+                                    log::info!(
+                                        "Successfully registered node {} for user {}",
+                                        node_id_u64,
+                                        user_id
+                                    );
                                     // 使用原始代理字符串存储结果
-                                    results.push((node_id_u64, original_proxy.clone(), user_id.clone()));
-                                },
+                                    results.push((
+                                        node_id_u64,
+                                        original_proxy.clone(),
+                                        user_id.clone(),
+                                    ));
+                                }
                                 Err(e) => {
-                                    log::error!("Failed to parse node_id {} as u64: {}", node_id, e);
+                                    log::error!(
+                                        "Failed to parse node_id {} as u64: {}",
+                                        node_id,
+                                        e
+                                    );
                                 }
                             }
-                        },
+                        }
                         Err(e) => {
                             // 检查是否是 HTTP 429 错误
-                            if let crate::orchestrator::error::OrchestratorError::Http { status, .. } = &e {
+                            if let crate::orchestrator::error::OrchestratorError::Http {
+                                status,
+                                ..
+                            } = &e
+                            {
                                 if *status == 429 || *status == 409 {
-                                    log::warn!("Rate limit or conflict (HTTP {}) for user {}, stopping registration", status, user_id);
+                                    log::warn!(
+                                        "Rate limit or conflict (HTTP {}) for user {}, stopping registration",
+                                        status,
+                                        user_id
+                                    );
                                     rate_limited = true;
                                     break; // 遇到速率限制或冲突，立即跳出循环
                                 }
@@ -344,7 +430,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // 将结果写入 CSV 文件
             if !results.is_empty() {
                 match write_register_results_csv(&results, &output_filename) {
-                    Ok(_) => log::info!("Successfully wrote {} results to {}", results.len(), output_filename),
+                    Ok(_) => log::info!(
+                        "Successfully wrote {} results to {}",
+                        results.len(),
+                        output_filename
+                    ),
                     Err(e) => log::error!("Failed to write results to CSV: {}", e),
                 }
             } else {
@@ -353,12 +443,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             log::info!("Node registration completed");
             return Ok(());
-        },
+        }
         Command::Start {
             node_id_file,
             headless,
             max_threads,
         } => {
+            let semaphore = GLOBAL_PROVER_SEMAPHORE.clone();
+            let concurrency = semaphore.available_permits();
             let mut node_infos = read_node_id_csv(&node_id_file)?;
             // 随机打乱 node_infos 顺序
             use rand::seq::SliceRandom;
@@ -367,45 +459,68 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut handles = Vec::new();
 
             // 计算启动多个节点所需的总时间（以毫秒为单位）
-            // 目标：15分钟内启动所有节点
-            let total_time_ms = 900 * 1000;
+            // 目标：6分钟内启动所有节点
+            let total_time_ms = 360 * 1000;
 
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
-            log::info!("Open file limit: {:?}", rlimit::getrlimit(rlimit::Resource::NOFILE));
+            log::info!(
+                "Open file limit: {:?}",
+                rlimit::getrlimit(rlimit::Resource::NOFILE)
+            );
             log::info!("共找到 {} 个节点需要启动", num_nodes);
+            log::info!("[prover_concurrency] authenticated_proving max concurrency = {} (from env or default)", concurrency);
 
             // 动态调整延迟区间
             let (min_delay, max_delay, total_time_ms, delay_desc) = if num_nodes <= 1 {
                 (0, 0, 0, "无需延迟".to_string())
-            } else if num_nodes <= 500 {
-                // 少量节点时，直接用2~5s的随机延迟
-                (2000, 5000, 0, "每节点延迟2~5s".to_string())
+            } else if num_nodes <= 200 {
+                // 少量节点时，直接用1~2s的随机延迟
+                (1000, 2000, 0, "每节点延迟1~2s".to_string())
             } else {
-                // 大量节点时，15分钟内均匀分配，且每次最小不少于100ms
-                let total_time_ms = 900 * 1000;
+                // 大量节点时，6分钟内均匀分配，且每次最小不少于100ms
+                let total_time_ms = 360 * 1000;
                 let min_delay = ((total_time_ms as f64 * 0.9) / (num_nodes as f64 - 1.0)) as u64;
                 let min_delay = min_delay.max(100);
                 let max_delay = (min_delay as f64 * 1.5) as u64;
-                (min_delay, max_delay, total_time_ms, format!("预计在15分钟内完成（节点启动间隔: {}-{}ms）", min_delay, max_delay))
+                (
+                    min_delay,
+                    max_delay,
+                    total_time_ms,
+                    format!(
+                        "预计在15分钟内完成（节点启动间隔: {}-{}ms）",
+                        min_delay, max_delay
+                    ),
+                )
             };
             log::info!("开始启动 {} 个节点，{}", num_nodes, delay_desc);
 
             // 逐个启动节点
-            for (i, (node_id, proxy)) in node_infos.into_iter().enumerate() {
+            for (i, (node_id, proxy, wallet_address)) in node_infos.into_iter().enumerate() {
                 let env = environment.clone();
                 let config_path = config_path.clone();
                 let proxy_clone = proxy.clone();
-
-                // 使用包装函数启动节点，完全在内部处理错误
+                let client_id_clone = wallet_address.clone();
+                let check_out_ip = i < 10000;
                 let node_id_copy = node_id;
                 let handle = tokio::spawn(async move {
-                    start_node_wrapper(node_id_copy, env, config_path, headless, max_threads, proxy_clone).await;
+                    start_node_wrapper(
+                        node_id_copy,
+                        env,
+                        config_path,
+                        headless,
+                        max_threads,
+                        proxy_clone,
+                        client_id_clone,
+                        check_out_ip,
+                    )
+                    .await;
                 });
                 handles.push(handle);
 
                 // 在启动下一个节点之前随机暂停
-                if i < num_nodes - 1 { // 最后一个节点不需要暂停
+                if i < num_nodes - 1 {
+                    // 最后一个节点不需要暂停
                     use rand::Rng;
                     let delay = rand::thread_rng().gen_range(min_delay..=max_delay);
 
@@ -430,7 +545,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             log::info!("Registering user with wallet address: {}", wallet_address);
             let orchestrator = Box::new(OrchestratorClient::new(environment));
             match register_user(&wallet_address, &config_path, orchestrator).await {
-                Ok(_) => log::info!("Successfully registered user with wallet address: {}", wallet_address),
+                Ok(_) => log::info!(
+                    "Successfully registered user with wallet address: {}",
+                    wallet_address
+                ),
                 Err(e) => log::error!("Failed to register user: {}", e),
             }
         }
@@ -444,7 +562,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 log::info!("No configuration found. Already logged out.");
             }
         }
-
     }
 
     Ok(())
@@ -465,83 +582,10 @@ async fn start(
     _headless: bool,
     max_threads: Option<u32>,
     proxy: Option<String>,
+    param_client_id: Option<String>,
+    check_out_ip: bool,
 ) -> Result<(), Box<dyn Error>> {
-    // Check version requirements before starting any workers
-    // match VersionRequirements::fetch().await {
-    //     Ok(requirements) => {
-    //         let current_version = env!("CARGO_PKG_VERSION");
-    //         match requirements.check_version_constraints(current_version, None, None) {
-    //             Ok(Some(violation)) => match violation.constraint_type {
-    //                 crate::version_requirements::ConstraintType::Blocking => {
-    //                     log::info!("❌ Version requirement not met: {}", violation.message);
-    //                 }
-    //                 crate::version_requirements::ConstraintType::Warning => {
-    //                     log::info!("⚠️  {}", violation.message);
-    //                 }
-    //                 crate::version_requirements::ConstraintType::Notice => {
-    //                     log::info!("ℹ️  {}", violation.message);
-    //                 }
-    //             },
-    //             Ok(None) => {
-    //                 // No violations found, continue
-    //             }
-    //             Err(e) => {
-    //                 log::error!("❌ Failed to parse version requirements: {}", e);
-    //                 log::error!(
-    //                     "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-    //                 );
-    //             }
-    //         }
-    //     }
-    //     Err(VersionRequirementsError::Fetch(e)) => {
-    //         log::error!("❌ Failed to fetch version requirements: {}", e);
-    //         log::error!(
-    //             "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-    //         );
-    //     }
-    //     Err(e) => {
-    //         log::error!("❌ Failed to check version requirements: {}", e);
-    //         log::error!(
-    //             "If this issue persists, please file a bug report at: https://github.com/nexus-xyz/nexus-cli/issues"
-    //         );
-    //     }
-    // }
-
     let mut node_id = node_id;
-
-    // If no node ID is provided, try to load it from the config file.
-    if node_id.is_none() && config_path.exists() {
-        let config = Config::load_from_file(&config_path)?;
-
-        // Check if user is registered but node_id is missing or invalid
-        if !config.user_id.is_empty() {
-            if config.node_id.is_empty() {
-                log::warn!("✅ User registered, but no node found. Please register a node to continue: nexus-cli register-node");
-                return Err(
-                    "Node registration required. Please run 'nexus-cli register-node' first."
-                        .into(),
-                );
-            }
-
-            match config.node_id.parse::<u64>() {
-                Ok(id) => {
-                    node_id = Some(id);
-                    log::info!("✅ Found Node ID from config file, Node ID: {}", id);
-                }
-                Err(_) => {
-                    log::error!("❌ Invalid node ID in config file. Please register a new node: nexus-cli register-node");
-                    return Err("Invalid node ID in config. Please run 'nexus-cli register-node' to fix this.".into());
-                }
-            }
-        } else {
-            log::error!("❌ No user registration found. Please register your wallet address first: nexus-cli register-user --wallet-address <your-wallet-address>");
-            return Err("User registration required. Please run 'nexus-cli register-user --wallet-address <your-wallet-address>' first.".into());
-        }
-    } else if node_id.is_none() {
-        // No config file exists at all
-        log::info!("Welcome to Nexus CLI! Please register your wallet address to get started: nexus-cli register-user --wallet-address <your-wallet-address>");
-    }
-
     // Create a signing key for the prover.
     let mut csprng = rand_core::OsRng;
     let signing_key: SigningKey = SigningKey::generate(&mut csprng);
@@ -553,35 +597,47 @@ async fn start(
         OrchestratorClient::new_with_proxy(env.clone(), proxy.clone())
     };
 
-        // 获取当前出网 IP 信息
-    match orchestrator_client.get_ip_info().await {
-        Ok(ip_info) => {
-            if let Some(id) = node_id {
-                if let Some(ref proxy_str) = proxy {
-                    log::info!("[node_id={}] 当前出网 IP 信息: {}, 使用代理: {}", id, ip_info, proxy_str);
+    // 获取当前出网 IP 信息
+    if check_out_ip {
+        match orchestrator_client.get_ip_info().await {
+            Ok(ip_info) => {
+                if let Some(id) = node_id {
+                    if let Some(ref proxy_str) = proxy {
+                        log::info!(
+                            "[node_id={}] 当前出网 IP 信息: {}, 使用代理: {}",
+                            id,
+                            ip_info,
+                            proxy_str
+                        );
+                    } else {
+                        log::info!("[node_id={}] 当前出网 IP 信息: {}, 未使用代理", id, ip_info);
+                    }
                 } else {
-                    log::info!("[node_id={}] 当前出网 IP 信息: {}, 未使用代理", id, ip_info);
-                }
-            } else {
-                if let Some(ref proxy_str) = proxy {
-                    log::info!("当前出网 IP 信息: {}, 使用代理: {}", ip_info, proxy_str);
-                } else {
-                    log::info!("当前出网 IP 信息: {}, 未使用代理", ip_info);
+                    if let Some(ref proxy_str) = proxy {
+                        log::info!("当前出网 IP 信息: {}, 使用代理: {}", ip_info, proxy_str);
+                    } else {
+                        log::info!("当前出网 IP 信息: {}, 未使用代理", ip_info);
+                    }
                 }
             }
-        },
-        Err(e) => {
-            if let Some(id) = node_id {
-                if let Some(ref proxy_str) = proxy {
-                    log::warn!("[node_id={}] 获取 IP 信息失败: {}, 使用代理: {}", id, e, proxy_str);
+            Err(e) => {
+                if let Some(id) = node_id {
+                    if let Some(ref proxy_str) = proxy {
+                        log::warn!(
+                            "[node_id={}] 获取 IP 信息失败: {}, 使用代理: {}",
+                            id,
+                            e,
+                            proxy_str
+                        );
+                    } else {
+                        log::warn!("[node_id={}] 获取 IP 信息失败: {}, 未使用代理", id, e);
+                    }
                 } else {
-                    log::warn!("[node_id={}] 获取 IP 信息失败: {}, 未使用代理", id, e);
-                }
-            } else {
-                if let Some(ref proxy_str) = proxy {
-                    log::warn!("获取 IP 信息失败: {}, 使用代理: {}", e, proxy_str);
-                } else {
-                    log::warn!("获取 IP 信息失败: {}, 未使用代理", e);
+                    if let Some(ref proxy_str) = proxy {
+                        log::warn!("获取 IP 信息失败: {}, 使用代理: {}", e, proxy_str);
+                    } else {
+                        log::warn!("获取 IP 信息失败: {}, 未使用代理", e);
+                    }
                 }
             }
         }
@@ -591,24 +647,31 @@ async fn start(
     let (shutdown_sender, _) = broadcast::channel(1); // Only one shutdown signal needed
 
     // Get client_id for analytics - use wallet address from API if available, otherwise "anonymous"
-    log::info!("[node_id={}] 准备获取client_id", node_id.unwrap());
-    let client_id = if let Some(node_id) = node_id {
-        match orchestrator_client.get_node(&node_id.to_string()).await {
-            Ok(wallet_address) => {
-                // Use wallet address as client_id for analytics
-                wallet_address
-            }
-            Err(_) => {
-                // If API call fails, use "anonymous" regardless of config
+    let node_id_unwrap = node_id.unwrap();
+    let client_id = match param_client_id {
+        Some(ref id) if !id.trim().is_empty() => {
+            log::info!("[node_id={}] 从CSV读取到client_id:{}", node_id_unwrap, id);
+            id.clone()
+        }
+        _ => {
+            if let Some(node_id) = node_id {
+                log::info!("[node_id={}] 准备调用API获取client_id", node_id_unwrap);
+                match orchestrator_client.get_node(&node_id.to_string()).await {
+                    Ok(wallet_address) => wallet_address,
+                    Err(_) => "anonymous".to_string(),
+                }
+            } else {
                 "anonymous".to_string()
             }
         }
-    } else {
-        // No node_id available, use "anonymous"
-        "anonymous".to_string()
     };
-    log::info!("[node_id={}] 获取client_id:{}", node_id.unwrap(), client_id.clone());
+    log::info!(
+        "[node_id={}] 获取到client_id:{}",
+        node_id_unwrap,
+        client_id.clone()
+    );
 
+    let semaphore = GLOBAL_PROVER_SEMAPHORE.clone();
     let (mut event_receiver, mut join_handles) = match node_id {
         Some(node_id) => {
             start_authenticated_workers(
@@ -619,16 +682,20 @@ async fn start(
                 shutdown_sender.subscribe(),
                 env.clone(),
                 client_id,
+                semaphore.clone(), // 新增参数
             )
-                .await
+            .await
         }
         None => {
             start_anonymous_workers(num_workers, shutdown_sender.subscribe(), env, client_id).await
         }
     };
 
+
     // 日志模式: log events to console, 标记 node_id
-    let node_id_display = node_id.map(|id| id.to_string()).unwrap_or_else(|| "anonymous".to_string());
+    let node_id_display = node_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "anonymous".to_string());
     let shutdown_sender_clone = shutdown_sender.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -639,7 +706,7 @@ async fn start(
     loop {
         tokio::select! {
             Some(event) = event_receiver.recv() => {
-                log::info!("[node_id={}] {}", node_id_display, event);
+                log::info!("[event_recv] [node_id={}] {}", node_id_display, event);
             }
             _ = shutdown_receiver.recv() => {
                 break;
