@@ -459,8 +459,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut handles = Vec::new();
 
             // 计算启动多个节点所需的总时间（以毫秒为单位）
-            // 目标：6分钟内启动所有节点
-            let total_time_ms = 360 * 1000;
+            // 目标：15分钟内启动所有节点
+            let total_time_ms = 900 * 1000;
 
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
@@ -474,12 +474,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // 动态调整延迟区间
             let (min_delay, max_delay, total_time_ms, delay_desc) = if num_nodes <= 1 {
                 (0, 0, 0, "无需延迟".to_string())
-            } else if num_nodes <= 200 {
+            } else if num_nodes <= 601 {
                 // 少量节点时，直接用1~2s的随机延迟
                 (1000, 2000, 0, "每节点延迟1~2s".to_string())
             } else {
-                // 大量节点时，6分钟内均匀分配，且每次最小不少于100ms
-                let total_time_ms = 360 * 1000;
+                // 大量节点时，15分钟内均匀分配，且每次最小不少于100ms
+                let total_time_ms = 900 * 1000;
                 let min_delay = ((total_time_ms as f64 * 0.9) / (num_nodes as f64 - 1.0)) as u64;
                 let min_delay = min_delay.max(100);
                 let max_delay = (min_delay as f64 * 1.5) as u64;
