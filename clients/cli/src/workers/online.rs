@@ -446,7 +446,7 @@ async fn handle_fetch_error(
             .await;
 
             if let Some(retry) = error.get_retry_after_seconds() {
-                let retry_after_seconds = if retry == 0 { 60 } else { retry };
+                let retry_after_seconds = if retry == 0 { 120 } else { retry }; // todo retry_after_seconds default 60s
                 state.set_backoff_from_server(retry_after_seconds);
                 send_event(
                     event_sender,

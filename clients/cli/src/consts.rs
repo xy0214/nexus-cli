@@ -55,5 +55,5 @@ pub mod prover {
 
     /// Maximum number of completed tasks to track (prevents memory growth)
     /// Set to 5x the task queue size to provide adequate duplicate detection
-    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 2;  // 5 -- > 5
+    pub const MAX_COMPLETED_TASKS: usize = 2;  // 100 * 5 -- > 25
 }
