@@ -11,13 +11,13 @@ pub mod prover {
     // to provide adequate buffering while preventing excessive memory usage.
 
     /// Maximum number of tasks that can be queued for processing
-    pub const TASK_QUEUE_SIZE: usize = 1;
+    pub const TASK_QUEUE_SIZE: usize = 2;
 
     /// Maximum number of events that can be queued for UI updates
-    pub const EVENT_QUEUE_SIZE: usize = 20;
+    pub const EVENT_QUEUE_SIZE: usize = 30;
 
     /// Maximum number of proof results that can be queued for submission
-    pub const RESULT_QUEUE_SIZE: usize = 20;
+    pub const RESULT_QUEUE_SIZE: usize = 30;
 
     // =============================================================================
     // TASK FETCHING BEHAVIOR
@@ -55,5 +55,5 @@ pub mod prover {
 
     /// Maximum number of completed tasks to track (prevents memory growth)
     /// Set to 5x the task queue size to provide adequate duplicate detection
-    pub const MAX_COMPLETED_TASKS: usize = 2;  // 100 * 5 -- > 25
+    pub const MAX_COMPLETED_TASKS: usize = 10;  // 100 * 5 -- > 25
 }
