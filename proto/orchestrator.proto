@@ -81,14 +81,19 @@ message GetProofTaskRequest {
 
 // A Prover task.
 message GetProofTaskResponse {
+  // Deprecated: use field in Task instead.
   // Program id. (Assuming client-side default programs)
-  string program_id = 1;
+  string program_id = 1 [deprecated = true];
 
+  // Deprecated: use field in Task instead.
   // Public inputs to the program.
-  bytes public_inputs = 2;
+  bytes public_inputs = 2 [deprecated = true];
 
+  // Deprecated: use field in Task instead.
   // The task's ID.
-  string task_id = 3;
+  string task_id = 3 [deprecated = true];
+
+  Task task = 4;
 }
 
 // Submit the result of a prover task.

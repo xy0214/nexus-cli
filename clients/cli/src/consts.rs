@@ -27,6 +27,9 @@ pub mod prover {
     /// When task queue drops below this threshold, fetch new tasks
     pub const LOW_WATER_MARK: usize = 1;
 
+    /// Delay the fetch task time by this amount of seconds
+    pub const FETCH_TASK_DELAY_TIME: u64 = 10;
+
     // =============================================================================
     // TIMING AND BACKOFF CONFIGURATION
     // =============================================================================
@@ -35,10 +38,6 @@ pub mod prover {
     /// Set to 2 minutes to balance responsiveness with server load
     pub const BACKOFF_DURATION: u64 = 120_000; // 2 minutes -- > 1 minutes
     pub const ERR_BACKOFF_DURATION: u64 = 120_000; // 2 minutes -- > 1 minutes
-
-    /// How often to log queue status information (milliseconds)
-    /// Provides regular status updates without spamming logs
-    pub const QUEUE_LOG_INTERVAL: u64 = 60_000; // 1 minute
 
     // =============================================================================
     // CACHE MANAGEMENT

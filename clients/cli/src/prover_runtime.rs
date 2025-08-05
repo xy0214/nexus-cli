@@ -20,6 +20,7 @@ use tokio::task::JoinHandle;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_authenticated_workers(
     node_id: u64,
     signing_key: SigningKey,
@@ -28,6 +29,7 @@ pub async fn start_authenticated_workers(
     shutdown: broadcast::Receiver<()>,
     environment: Environment,
     client_id: String,
+    max_tasks: Option<u32>,
     semaphore: Arc<Semaphore>, // 新增参数
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
     // 确保orchestrator客户端设置了node_id
@@ -77,7 +79,7 @@ pub async fn start_authenticated_workers(
                 environment,
                 client_id,
             )
-                .await;
+            .await;
         })
     };
     join_handles.push(fetch_prover_tasks_handle);
@@ -116,8 +118,9 @@ pub async fn start_authenticated_workers(
         completed_tasks.clone(),
         environment,
         client_id,
+        max_tasks,
     )
-        .await;
+    .await;
     join_handles.push(submit_proofs_handle);
 
     (event_receiver, join_handles)
@@ -180,7 +183,12 @@ mod tests {
         let mut mock = MockOrchestrator::new();
         mock.expect_get_proof_task().returning_st(move |_, _| {
             // Simulate a task with dummy data
-            let task = Task::new(i.to_string(), format!("Task {}", i), vec![1, 2, 3]);
+            let task = Task::new(
+                i.to_string(),
+                format!("Task {}", i),
+                vec![1, 2, 3],
+                crate::nexus_orchestrator::TaskType::ProofRequired,
+            );
             i += 1;
             Ok(task)
         });
@@ -216,7 +224,7 @@ mod tests {
                 crate::environment::Environment::Production,
                 "test-client-id".to_string(),
             )
-                .await;
+            .await;
         });
 
         // Receive tasks

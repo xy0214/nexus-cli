@@ -428,7 +428,7 @@ impl Orchestrator for OrchestratorClient {
         proof: Vec<u8>,
         signing_key: SigningKey,
         num_provers: usize,
-        task_type: Option<crate::nexus_orchestrator::TaskType>,
+        task_type: crate::nexus_orchestrator::TaskType,
     ) -> Result<(), OrchestratorError> {
         // 获取node_id信息用于日志
         let node_info = if let Some(node_id) = &self.node_id {
@@ -448,7 +448,7 @@ impl Orchestrator for OrchestratorClient {
         // Only attach proof if task type is not ProofHash
         // If task_type is None, default to attaching proof for backward compatibility
         let proof_to_send = match task_type {
-            Some(crate::nexus_orchestrator::TaskType::ProofHash) => Vec::new(),
+            crate::nexus_orchestrator::TaskType::ProofHash => Vec::new(),
             _ => proof, // Attach proof for ProofRequired or None (backward compatibility)
         };
 
@@ -610,7 +610,7 @@ mod tests {
                 proof.clone(),
                 signing_key.clone(),
                 num_workers,
-                Some(TaskType::ProofRequired),
+                TaskType::ProofRequired,
             )
             .await;
         // This will fail because we're not actually submitting to a real orchestrator,
@@ -625,7 +625,7 @@ mod tests {
                 proof,
                 signing_key,
                 num_workers,
-                Some(TaskType::ProofHash),
+                TaskType::ProofHash,
             )
             .await;
         // This will also fail, but the proof should be empty in the request

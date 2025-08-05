@@ -10,7 +10,7 @@ use crate::analytics::{
     track_proof_submission_success,
 };
 use crate::consts::prover::{
-    BACKOFF_DURATION, ERR_BACKOFF_DURATION, LOW_WATER_MARK, QUEUE_LOG_INTERVAL, TASK_QUEUE_SIZE,
+    BACKOFF_DURATION, FETCH_TASK_DELAY_TIME, LOW_WATER_MARK, TASK_QUEUE_SIZE,
 };
 use crate::environment::Environment;
 use crate::error_classifier::{ErrorClassifier, LogLevel};
@@ -68,8 +68,6 @@ async fn send_proof_event(
 pub struct TaskFetchState {
     last_fetch_time: std::time::Instant,
     backoff_duration: Duration,
-    last_queue_log_time: std::time::Instant,
-    queue_log_interval: Duration,
     pub error_classifier: ErrorClassifier,
 }
 
@@ -79,8 +77,6 @@ impl TaskFetchState {
             last_fetch_time: std::time::Instant::now()
                 - Duration::from_millis(BACKOFF_DURATION + 1000), // Allow immediate first fetch
             backoff_duration: Duration::from_millis(BACKOFF_DURATION), // Start with 120 second backoff
-            last_queue_log_time: std::time::Instant::now(),
-            queue_log_interval: Duration::from_millis(QUEUE_LOG_INTERVAL), // Log queue status every 30 seconds
             error_classifier: ErrorClassifier::new(),
         }
     }
@@ -88,11 +84,6 @@ impl TaskFetchState {
     // =========================================================================
     // QUERY METHODS
     // =========================================================================
-
-    /// Check if it's time to log queue status
-    pub fn should_log_queue_status(&self) -> bool {
-        self.last_queue_log_time.elapsed() >= self.queue_log_interval
-    }
 
     /// Check if enough time has passed since last fetch attempt (respects backoff)
     pub fn can_fetch_now(&self) -> bool {
@@ -102,11 +93,6 @@ impl TaskFetchState {
     /// Get current backoff duration
     pub fn backoff_duration(&self) -> Duration {
         self.backoff_duration
-    }
-
-    /// Get time since last fetch attempt
-    pub fn time_since_last_fetch(&self) -> Duration {
-        self.last_fetch_time.elapsed()
     }
 
     /// Check if we should fetch tasks (combines queue level and backoff timing)
@@ -123,27 +109,18 @@ impl TaskFetchState {
         self.last_fetch_time = std::time::Instant::now();
     }
 
-    /// Record that queue status was logged (updates timing)
-    pub fn record_queue_log(&mut self) {
-        self.last_queue_log_time = std::time::Instant::now();
-    }
-
-    /// Reset backoff to default duration (after successful operation)
-    pub fn reset_backoff(&mut self) {
-        self.backoff_duration = Duration::from_millis(BACKOFF_DURATION);
-    }
-
     /// Set backoff duration from server's Retry-After header (in seconds)
     /// Respects server's exact timing for rate limit compliance
     pub fn set_backoff_from_server(&mut self, retry_after_seconds: u32) {
-        self.backoff_duration = Duration::from_secs(retry_after_seconds as u64);
+        self.backoff_duration =
+            Duration::from_secs(retry_after_seconds as u64 + FETCH_TASK_DELAY_TIME);
     }
 
     /// Increase backoff duration for error handling (exponential backoff)
     pub fn increase_backoff_for_error(&mut self) {
         self.backoff_duration = std::cmp::min(
-            self.backoff_duration * 1,
-            Duration::from_millis(ERR_BACKOFF_DURATION * 1),
+            self.backoff_duration * 2,
+            Duration::from_millis(BACKOFF_DURATION * 2),
         );
     }
 }
@@ -169,29 +146,25 @@ pub async fn fetch_prover_tasks(
             _ = tokio::time::sleep(Duration::from_millis(500)) => {
                 let tasks_in_queue = TASK_QUEUE_SIZE - sender.capacity();
 
-                // Log queue status periodically
-                if state.should_log_queue_status() {
-                    state.record_queue_log();
-                    log_queue_status(&event_sender, tasks_in_queue, &state).await;
-                }
-
                 // Simple condition: fetch when queue is low and backoff time has passed
                 if state.should_fetch(tasks_in_queue) {
-                    if let Err(should_return) = fetch_single_task(
-                        &*orchestrator_client,
-                        &node_id,
-                        verifying_key,
-                        &sender,
-                        &event_sender,
-                        &recent_tasks,
-                        &mut state,
-                        &environment,
-                        &client_id,
-                    ).await {
+                            if let Err(should_return) = fetch_single_task(
+            &*orchestrator_client,
+            &node_id,
+            verifying_key,
+            &sender,
+            &event_sender,
+            &recent_tasks,
+            &mut state,
+            &environment,
+            &client_id,
+        ).await {
                         if should_return {
                             return;
                         }
                     }
+
+
                 }
             }
         }
@@ -199,6 +172,7 @@ pub async fn fetch_prover_tasks(
 }
 
 /// Handle successful task fetch: duplicate check, caching, and queue management
+#[allow(clippy::too_many_arguments)]
 async fn handle_task_success(
     task: Task,
     sender: &mpsc::Sender<Task>,
@@ -220,7 +194,6 @@ async fn handle_task_success(
         sender,
         event_sender,
         recent_tasks,
-        state,
         environment,
         client_id,
     )
@@ -243,12 +216,12 @@ async fn handle_duplicate_task(event_sender: &mpsc::Sender<Event>, state: &mut T
 }
 
 /// Process a new (non-duplicate) task: cache, queue, analytics, and logging
+#[allow(clippy::too_many_arguments)]
 async fn process_new_task(
     task: Task,
     sender: &mpsc::Sender<Task>,
     event_sender: &mpsc::Sender<Event>,
     recent_tasks: &TaskCache,
-    state: &mut TaskFetchState,
     environment: &Environment,
     client_id: &str,
 ) -> Result<(), bool> {
@@ -273,35 +246,7 @@ async fn process_new_task(
         client_id.to_string(),
     ));
 
-    // Success: reset backoff and log queue status
-    state.reset_backoff();
-    log_successful_task_addition(sender, event_sender).await;
-
     Ok(())
-}
-
-/// Log successful task addition with queue status
-async fn log_successful_task_addition(
-    sender: &mpsc::Sender<Task>,
-    event_sender: &mpsc::Sender<Event>,
-) {
-    let current_queue_level = TASK_QUEUE_SIZE - sender.capacity();
-    let queue_percentage = (current_queue_level as f64 / TASK_QUEUE_SIZE as f64 * 100.0) as u32;
-
-    send_event(
-        event_sender,
-        format!(
-            "Queue status: +1 task → {} total ({}% full)",
-            current_queue_level, queue_percentage
-        ),
-        crate::events::EventType::Refresh,
-        if queue_percentage >= 80 {
-            LogLevel::Info
-        } else {
-            LogLevel::Debug
-        },
-    )
-    .await;
 }
 
 /// Handle fetch timeout with backoff and logging
@@ -350,10 +295,11 @@ async fn fetch_single_task(
 
     send_event(
         event_sender,
-        "[Task step 1 of 3] Fetching task... Note: CLI tasks are harder to solve, so they receive more points than web provers".to_string(),
+        "Step 1 of 4: Requesting task...".to_string(),
         crate::events::EventType::Refresh,
         LogLevel::Info,
-    ).await;
+    )
+    .await;
 
     // Fetch task with timeout
     let timeout_duration = Duration::from_secs(60);
@@ -390,40 +336,6 @@ async fn fetch_single_task(
     }
 }
 
-/// Log the current queue status with timing information
-async fn log_queue_status(
-    event_sender: &mpsc::Sender<Event>,
-    tasks_in_queue: usize,
-    state: &TaskFetchState,
-) {
-    let time_since_last = state.time_since_last_fetch();
-    let backoff_duration = state.backoff_duration();
-    let backoff_secs = backoff_duration.as_secs();
-
-    let message = if state.should_fetch(tasks_in_queue) {
-        format!(
-            "Tasks Queue low: {} tasks to compute, ready to fetch",
-            tasks_in_queue
-        )
-    } else {
-        let time_since_secs = time_since_last.as_secs();
-        format!(
-            "Tasks to compute: {} tasks, waiting {}s more (retry every {}s)",
-            tasks_in_queue,
-            backoff_secs.saturating_sub(time_since_secs),
-            backoff_secs
-        )
-    };
-
-    send_event(
-        event_sender,
-        message,
-        crate::events::EventType::Refresh,
-        LogLevel::Debug,
-    )
-    .await;
-}
-
 /// Handle fetch errors with appropriate backoff
 async fn handle_fetch_error(
     error: OrchestratorError,
@@ -431,27 +343,13 @@ async fn handle_fetch_error(
     state: &mut TaskFetchState,
 ) {
     match error {
-        OrchestratorError::Http {
-            status: 429,
-            ref headers,
-            ..
-        } => {
-            // Debug: print headers for 429 responses
-            send_event(
-                event_sender,
-                format!("429 Rate limit retry-after: {:?}", headers.get("retry-after")),
-                crate::events::EventType::Refresh,
-                LogLevel::Debug,
-            )
-            .await;
-
-            if let Some(retry) = error.get_retry_after_seconds() {
-                let retry_after_seconds = if retry == 0 { 120 } else { retry }; // todo retry_after_seconds default 60s
+        OrchestratorError::Http { status: 429, .. } => {
+            if let Some(retry_after_seconds) = error.get_retry_after_seconds() {
                 state.set_backoff_from_server(retry_after_seconds);
                 send_event(
                     event_sender,
-                    format!("Rate limited - retrying in {}s", retry_after_seconds),
-                    crate::events::EventType::Error,
+                    format!("Fetch rate limited - retrying in {}s", retry_after_seconds),
+                    crate::events::EventType::Waiting,
                     LogLevel::Warn,
                 )
                 .await;
@@ -460,12 +358,28 @@ async fn handle_fetch_error(
                 state.increase_backoff_for_error();
                 send_event(
                     event_sender,
-                    "Rate limited - no retry time specified".to_string(),
-                    crate::events::EventType::Error,
+                    "Fetch rate limited - no retry time specified".to_string(),
+                    crate::events::EventType::Waiting,
                     LogLevel::Error,
                 )
                 .await;
             }
+        }
+        OrchestratorError::Http {
+            status, headers, ..
+        } => {
+            // Print out all headers
+            let mut msg = String::new();
+            for (key, value) in headers {
+                msg.push_str(&format!("{}: {}\n", key, value));
+            }
+            send_event(
+                event_sender,
+                format!("HTTP Error {}: {}", status, msg),
+                crate::events::EventType::Error,
+                LogLevel::Warn,
+            )
+            .await;
         }
         _ => {
             state.increase_backoff_for_error();
@@ -476,7 +390,7 @@ async fn handle_fetch_error(
                     error,
                     state.backoff_duration().as_secs()
                 ),
-                crate::events::EventType::Error,
+                crate::events::EventType::Waiting,
                 log_level,
             );
             if event.should_display() {
@@ -498,8 +412,10 @@ pub async fn submit_proofs(
     completed_tasks: TaskCache,
     environment: Environment,
     client_id: String,
+    max_tasks: Option<u32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut tasks_processed = 0;
         loop {
             tokio::select! {
                 maybe_item = results.recv() => {
@@ -516,7 +432,16 @@ pub async fn submit_proofs(
                                 &completed_tasks,
                                 &environment,
                                 &client_id,
+                                &mut tasks_processed,
                             ).await;
+
+                            // Check if we've reached the max tasks limit
+                            if let Some(max) = max_tasks {
+                                if tasks_processed >= max {
+                                    // Reached max tasks, exit cleanly
+                                    std::process::exit(0);
+                                }
+                            }
                         }
                         None => break,
                     }
@@ -575,7 +500,17 @@ async fn submit_proof_to_orchestrator(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
+    tasks_processed: &mut u32,
 ) {
+    // Send submitting message
+    send_proof_event(
+        event_sender,
+        "Step 3 of 4: Submitting (Sending your proof to the network)...".to_string(),
+        crate::events::EventType::Waiting,
+        LogLevel::Info,
+    )
+    .await;
+
     // Serialize proof for submission
     let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
 
@@ -600,6 +535,9 @@ async fn submit_proof_to_orchestrator(
             ));
             handle_submission_success(task, event_sender, completed_tasks, environment, client_id)
                 .await;
+
+            // Increment task counter
+            *tasks_processed += 1;
         }
         Err(e) => {
             handle_submission_error(
@@ -628,6 +566,7 @@ async fn process_proof_submission(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
+    tasks_processed: &mut u32,
 ) {
     // Check for duplicate submissions
     if check_duplicate_submission(&task, completed_tasks, event_sender).await {
@@ -649,6 +588,7 @@ async fn process_proof_submission(
         completed_tasks,
         environment,
         client_id,
+        tasks_processed,
     )
     .await;
 }
@@ -662,10 +602,7 @@ async fn handle_submission_success(
     client_id: &str,
 ) {
     completed_tasks.insert(task.task_id.clone()).await;
-    let msg = format!(
-        "[Task step 3 of 3] Proof submitted (Task ID: {}) Points for this node will be updated in https://app.nexus.xyz/rewards within 10 minutes",
-        task.task_id
-    );
+    let msg = "Step 4 of 4: Submitted! ≈300 points will be added soon\n".to_string();
     // Track analytics for proof acceptance (non-blocking)
     tokio::spawn(track_proof_accepted(
         task.clone(),
@@ -742,15 +679,24 @@ mod tests {
 
         // Test setting a reasonable retry time
         state.set_backoff_from_server(60);
-        assert_eq!(state.backoff_duration, Duration::from_secs(60));
+        assert_eq!(
+            state.backoff_duration,
+            Duration::from_secs(60 + FETCH_TASK_DELAY_TIME)
+        );
 
         // Test that longer retry times are respected (no capping)
         state.set_backoff_from_server(300); // 5 minutes
-        assert_eq!(state.backoff_duration, Duration::from_secs(300));
+        assert_eq!(
+            state.backoff_duration,
+            Duration::from_secs(300 + FETCH_TASK_DELAY_TIME)
+        );
 
         // Test zero retry time
         state.set_backoff_from_server(0);
-        assert_eq!(state.backoff_duration, Duration::from_secs(0));
+        assert_eq!(
+            state.backoff_duration,
+            Duration::from_secs(FETCH_TASK_DELAY_TIME)
+        );
     }
 
     #[test]
@@ -759,18 +705,9 @@ mod tests {
 
         // Test that very long retry times are respected
         state.set_backoff_from_server(3600); // 1 hour
-        assert_eq!(state.backoff_duration, Duration::from_secs(3600));
-    }
-
-    #[test]
-    fn test_reset_backoff() {
-        let mut state = TaskFetchState::new();
-
-        // Test that reset sets backoff to default 120s
-        state.reset_backoff();
         assert_eq!(
             state.backoff_duration,
-            Duration::from_millis(BACKOFF_DURATION)
+            Duration::from_secs(3600 + FETCH_TASK_DELAY_TIME)
         );
     }
 }
