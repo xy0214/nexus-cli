@@ -96,7 +96,7 @@ impl From<&crate::nexus_orchestrator::GetProofTaskResponse> for Task {
         let task_type = crate::nexus_orchestrator::TaskType::try_from(
             response.task.as_ref().unwrap().task_type,
         )
-        .unwrap();
+            .unwrap();
 
         Task {
             task_id: response.task_id.clone(),

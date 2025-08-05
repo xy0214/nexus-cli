@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-#[allow(clippy::too_many_arguments)]
+
 pub async fn start_authenticated_workers(
     node_id: u64,
     signing_key: SigningKey,
@@ -29,7 +29,6 @@ pub async fn start_authenticated_workers(
     shutdown: broadcast::Receiver<()>,
     environment: Environment,
     client_id: String,
-    max_tasks: Option<u32>,
     semaphore: Arc<Semaphore>, // 新增参数
 ) -> (mpsc::Receiver<Event>, Vec<JoinHandle<()>>) {
     // 确保orchestrator客户端设置了node_id
@@ -40,18 +39,6 @@ pub async fn start_authenticated_workers(
     // Worker events
     let (event_sender, event_receiver) =
         mpsc::channel::<Event>(crate::consts::prover::EVENT_QUEUE_SIZE);
-
-    // todo 去掉版本check
-    // Start version checker
-    // let version_checker_handle = {
-    //     let current_version = env!("CARGO_PKG_VERSION").to_string();
-    //     let event_sender = event_sender.clone();
-    //     let shutdown = shutdown.resubscribe();
-    //     tokio::spawn(async move {
-    //         start_version_checker_task(current_version, event_sender, shutdown).await;
-    //     })
-    // };
-    // join_handles.push(version_checker_handle);
 
     // A bounded list of recently fetched task IDs (prevents refetching currently processing tasks)
     let enqueued_tasks = TaskCache::new(MAX_COMPLETED_TASKS);
@@ -79,7 +66,7 @@ pub async fn start_authenticated_workers(
                 environment,
                 client_id,
             )
-            .await;
+                .await;
         })
     };
     join_handles.push(fetch_prover_tasks_handle);
@@ -95,8 +82,8 @@ pub async fn start_authenticated_workers(
         shutdown.resubscribe(),
         environment.clone(),
         client_id.clone(),
-        semaphore.clone(), // 新增参数
-    ).await;
+        semaphore.clone(),
+    );
     join_handles.extend(worker_handles);
 
     // Dispatch tasks to workers
@@ -118,9 +105,8 @@ pub async fn start_authenticated_workers(
         completed_tasks.clone(),
         environment,
         client_id,
-        max_tasks,
     )
-    .await;
+        .await;
     join_handles.push(submit_proofs_handle);
 
     (event_receiver, join_handles)
@@ -224,7 +210,7 @@ mod tests {
                 crate::environment::Environment::Production,
                 "test-client-id".to_string(),
             )
-            .await;
+                .await;
         });
 
         // Receive tasks

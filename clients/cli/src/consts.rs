@@ -11,13 +11,13 @@ pub mod prover {
     // to provide adequate buffering while preventing excessive memory usage.
 
     /// Maximum number of tasks that can be queued for processing
-    pub const TASK_QUEUE_SIZE: usize = 2;
+    pub const TASK_QUEUE_SIZE: usize = 100;
 
     /// Maximum number of events that can be queued for UI updates
-    pub const EVENT_QUEUE_SIZE: usize = 30;
+    pub const EVENT_QUEUE_SIZE: usize = 100;
 
     /// Maximum number of proof results that can be queued for submission
-    pub const RESULT_QUEUE_SIZE: usize = 30;
+    pub const RESULT_QUEUE_SIZE: usize = 100;
 
     // =============================================================================
     // TASK FETCHING BEHAVIOR
@@ -36,8 +36,7 @@ pub mod prover {
 
     /// Default backoff duration when retrying failed operations (milliseconds)
     /// Set to 2 minutes to balance responsiveness with server load
-    pub const BACKOFF_DURATION: u64 = 120_000; // 2 minutes -- > 1 minutes
-    pub const ERR_BACKOFF_DURATION: u64 = 120_000; // 2 minutes -- > 1 minutes
+    pub const BACKOFF_DURATION: u64 = 120_000; // 2 minutes
 
     // =============================================================================
     // CACHE MANAGEMENT
@@ -46,7 +45,7 @@ pub mod prover {
     /// Duration to keep task IDs in duplicate-prevention cache (milliseconds)
     /// Long enough to prevent immediate re-processing, short enough to allow
     /// eventual retry of legitimately failed tasks
-    pub const CACHE_EXPIRATION: u64 = 120_000; // 2 minutes
+    pub const CACHE_EXPIRATION: u64 = 300_000; // 5 minutes
 
     // =============================================================================
     // COMPUTED CONSTANTS
@@ -54,5 +53,5 @@ pub mod prover {
 
     /// Maximum number of completed tasks to track (prevents memory growth)
     /// Set to 5x the task queue size to provide adequate duplicate detection
-    pub const MAX_COMPLETED_TASKS: usize = 10;  // 100 * 5 -- > 25
+    pub const MAX_COMPLETED_TASKS: usize = TASK_QUEUE_SIZE * 5;
 }

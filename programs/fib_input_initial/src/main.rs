@@ -50,5 +50,5 @@ fn main(n: u32, init_a: u32, init_b: u32) {
         curr = next;
     }
     
-    // println!("{:?}", curr);
+    println!("{:?}", curr);
 } 

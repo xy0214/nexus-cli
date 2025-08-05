@@ -199,20 +199,10 @@ pub async fn authenticated_proving(
             if task_type == crate::nexus_orchestrator::TaskType::ProofHash {
                 // For ProofHash tasks, we still return the proof but the submission logic
                 // should only use the hash and discard the proof
-                let view = final_view.ok_or_else(|| {
-                    ProverError::Stwo("Failed to generate proof view".to_string())
-                })?;
-                let proof = final_proof
-                    .ok_or_else(|| ProverError::Stwo("Failed to generate proof".to_string()))?;
-                (view, proof, final_proof_hash)
+                (final_view.unwrap(), final_proof.unwrap(), final_proof_hash)
             } else {
                 // For ProofRequired tasks, return the actual proof
-                let view = final_view.ok_or_else(|| {
-                    ProverError::Stwo("Failed to generate proof view".to_string())
-                })?;
-                let proof = final_proof
-                    .ok_or_else(|| ProverError::Stwo("Failed to generate proof".to_string()))?;
-                (view, proof, final_proof_hash)
+                (final_view.unwrap(), final_proof.unwrap(), final_proof_hash)
             }
         }
         _ => {
@@ -467,7 +457,8 @@ mod tests {
     }
 
     #[test]
-    // Should handle wrong input size gracefully without panicking.
+    #[should_panic(expected = "fib_input_initial expects exactly 12 bytes, got 8")]
+    // Should panic when analytics receives wrong input size.
     fn test_analytics_wrong_input_size() {
         let task = Task::new(
             "test_task".to_string(),
@@ -480,12 +471,10 @@ mod tests {
         let environment = Environment::Production;
         let client_id = "test_client".to_string();
 
-        // This should not panic anymore - analytics handles wrong input sizes gracefully
+        // This should panic with the assertion error
         tokio::runtime::Runtime::new().unwrap().block_on(
             crate::analytics::track_authenticated_proof_analytics(task, environment, client_id),
         );
-
-        println!("Analytics test completed successfully - wrong input size handled gracefully");
     }
 
     #[test]

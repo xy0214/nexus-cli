@@ -148,23 +148,21 @@ pub async fn fetch_prover_tasks(
 
                 // Simple condition: fetch when queue is low and backoff time has passed
                 if state.should_fetch(tasks_in_queue) {
-                            if let Err(should_return) = fetch_single_task(
-            &*orchestrator_client,
-            &node_id,
-            verifying_key,
-            &sender,
-            &event_sender,
-            &recent_tasks,
-            &mut state,
-            &environment,
-            &client_id,
-        ).await {
+                    if let Err(should_return) = fetch_single_task(
+                        &*orchestrator_client,
+                        &node_id,
+                        verifying_key,
+                        &sender,
+                        &event_sender,
+                        &recent_tasks,
+                        &mut state,
+                        &environment,
+                        &client_id,
+                    ).await {
                         if should_return {
                             return;
                         }
                     }
-
-
                 }
             }
         }
@@ -172,7 +170,6 @@ pub async fn fetch_prover_tasks(
 }
 
 /// Handle successful task fetch: duplicate check, caching, and queue management
-#[allow(clippy::too_many_arguments)]
 async fn handle_task_success(
     task: Task,
     sender: &mpsc::Sender<Task>,
@@ -197,7 +194,7 @@ async fn handle_task_success(
         environment,
         client_id,
     )
-    .await
+        .await
 }
 
 /// Handle duplicate task detection
@@ -212,11 +209,10 @@ async fn handle_duplicate_task(event_sender: &mpsc::Sender<Event>, state: &mut T
         crate::events::EventType::Refresh,
         LogLevel::Warn,
     )
-    .await;
+        .await;
 }
 
 /// Process a new (non-duplicate) task: cache, queue, analytics, and logging
-#[allow(clippy::too_many_arguments)]
 async fn process_new_task(
     task: Task,
     sender: &mpsc::Sender<Task>,
@@ -235,7 +231,7 @@ async fn process_new_task(
             crate::events::EventType::Shutdown,
             LogLevel::Error,
         )
-        .await;
+            .await;
         return Err(true); // Signal shutdown
     }
 
@@ -262,8 +258,9 @@ async fn handle_fetch_timeout(
         crate::events::EventType::Error,
         LogLevel::Warn,
     )
-    .await;
+        .await;
 }
+
 
 /// Perform task fetch with timeout
 async fn fetch_task_with_timeout(
@@ -299,7 +296,7 @@ async fn fetch_single_task(
         crate::events::EventType::Refresh,
         LogLevel::Info,
     )
-    .await;
+        .await;
 
     // Fetch task with timeout
     let timeout_duration = Duration::from_secs(60);
@@ -309,7 +306,7 @@ async fn fetch_single_task(
         verifying_key,
         timeout_duration,
     )
-    .await
+        .await
     {
         Ok(fetch_result) => match fetch_result {
             Ok(task) => {
@@ -322,7 +319,7 @@ async fn fetch_single_task(
                     environment,
                     client_id,
                 )
-                .await
+                    .await
             }
             Err(e) => {
                 handle_fetch_error(e, event_sender, state).await;
@@ -344,7 +341,8 @@ async fn handle_fetch_error(
 ) {
     match error {
         OrchestratorError::Http { status: 429, .. } => {
-            if let Some(retry_after_seconds) = error.get_retry_after_seconds() {
+            if let Some(retry) = error.get_retry_after_seconds() {
+                let retry_after_seconds = if retry == 0 { 120 } else { retry }; // todo retry_after_seconds default 60s
                 state.set_backoff_from_server(retry_after_seconds);
                 send_event(
                     event_sender,
@@ -352,7 +350,7 @@ async fn handle_fetch_error(
                     crate::events::EventType::Waiting,
                     LogLevel::Warn,
                 )
-                .await;
+                    .await;
             } else {
                 // This shouldn't happen with a properly configured server
                 state.increase_backoff_for_error();
@@ -362,7 +360,7 @@ async fn handle_fetch_error(
                     crate::events::EventType::Waiting,
                     LogLevel::Error,
                 )
-                .await;
+                    .await;
             }
         }
         OrchestratorError::Http {
@@ -379,7 +377,7 @@ async fn handle_fetch_error(
                 crate::events::EventType::Error,
                 LogLevel::Warn,
             )
-            .await;
+                .await;
         }
         _ => {
             state.increase_backoff_for_error();
@@ -412,10 +410,8 @@ pub async fn submit_proofs(
     completed_tasks: TaskCache,
     environment: Environment,
     client_id: String,
-    max_tasks: Option<u32>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut tasks_processed = 0;
         loop {
             tokio::select! {
                 maybe_item = results.recv() => {
@@ -432,16 +428,7 @@ pub async fn submit_proofs(
                                 &completed_tasks,
                                 &environment,
                                 &client_id,
-                                &mut tasks_processed,
                             ).await;
-
-                            // Check if we've reached the max tasks limit
-                            if let Some(max) = max_tasks {
-                                if tasks_processed >= max {
-                                    // Reached max tasks, exit cleanly
-                                    std::process::exit(0);
-                                }
-                            }
                         }
                         None => break,
                     }
@@ -470,7 +457,7 @@ async fn check_duplicate_submission(
             crate::events::EventType::Error,
             LogLevel::Warn,
         )
-        .await;
+            .await;
         return true; // Is duplicate
     }
     false // Not duplicate
@@ -500,7 +487,6 @@ async fn submit_proof_to_orchestrator(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
-    tasks_processed: &mut u32,
 ) {
     // Send submitting message
     send_proof_event(
@@ -509,7 +495,7 @@ async fn submit_proof_to_orchestrator(
         crate::events::EventType::Waiting,
         LogLevel::Info,
     )
-    .await;
+        .await;
 
     // Serialize proof for submission
     let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
@@ -535,9 +521,6 @@ async fn submit_proof_to_orchestrator(
             ));
             handle_submission_success(task, event_sender, completed_tasks, environment, client_id)
                 .await;
-
-            // Increment task counter
-            *tasks_processed += 1;
         }
         Err(e) => {
             handle_submission_error(
@@ -548,7 +531,7 @@ async fn submit_proof_to_orchestrator(
                 environment,
                 client_id,
             )
-            .await;
+                .await;
         }
     }
 }
@@ -566,7 +549,6 @@ async fn process_proof_submission(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
-    tasks_processed: &mut u32,
 ) {
     // Check for duplicate submissions
     if check_duplicate_submission(&task, completed_tasks, event_sender).await {
@@ -588,9 +570,8 @@ async fn process_proof_submission(
         completed_tasks,
         environment,
         client_id,
-        tasks_processed,
     )
-    .await;
+        .await;
 }
 
 /// Handle successful proof submission
@@ -616,7 +597,7 @@ async fn handle_submission_success(
         crate::events::EventType::Success,
         LogLevel::Info,
     )
-    .await;
+        .await;
 }
 
 /// Handle proof submission errors
@@ -665,7 +646,7 @@ async fn handle_submission_error(
         crate::events::EventType::Error,
         LogLevel::Error,
     )
-    .await;
+        .await;
 }
 
 #[cfg(test)]

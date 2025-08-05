@@ -16,6 +16,9 @@ use crate::workers::online::ProofResult;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
+use std::sync::Arc;
+use rand::Rng;
+use tokio::sync::Semaphore;
 
 /// Spawns a dispatcher that forwards tasks to available workers in round-robin fashion.
 pub fn start_dispatcher(
@@ -55,11 +58,7 @@ pub fn start_dispatcher(
 /// A tuple containing:
 /// * A vector of `Sender<Task>` for each worker, allowing tasks to be sent to them.
 /// * A vector of `JoinHandle<()>` for each worker, allowing the main thread to await their completion.
-use std::sync::Arc;
-use rand::Rng;
-use tokio::sync::Semaphore;
-
-pub async fn start_workers(
+pub fn start_workers(
     num_workers: usize,
     results_sender: mpsc::Sender<(Task, ProofResult)>,
     event_sender: mpsc::Sender<Event>,

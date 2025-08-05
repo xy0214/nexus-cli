@@ -487,10 +487,10 @@ impl Orchestrator for OrchestratorClient {
                     _ => false,
                 };
                 if is_rate_limit {
-                    log::warn!("{}遇到限流 (429)，本次提交证明失败: task_id={}", node_info, task_id);
+                    log::warn!("{}遇到限流 (429): task_id={}", node_info, task_id);
+                } else {
+                    log::warn!("{}证明提交失败: task_id={}, proof_hash={}, error={}", node_info, task_id, proof_hash, err);
                 }
-                // 如果不是429错误，记录错误日志并返回错误
-                log::warn!("{}证明提交失败: task_id={}, proof_hash={}, error={}", node_info, task_id, proof_hash, err);
                 Err(err)
             },
             Ok(result) => {
@@ -503,6 +503,7 @@ impl Orchestrator for OrchestratorClient {
         result
     }
 }
+
 
 #[cfg(test)]
 /// These are ignored by default since they require a live orchestrator to run.
