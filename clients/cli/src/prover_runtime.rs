@@ -21,6 +21,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 
+#[allow(clippy::too_many_arguments)]
 pub async fn start_authenticated_workers(
     node_id: u64,
     signing_key: SigningKey,

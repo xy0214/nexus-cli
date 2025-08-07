@@ -464,12 +464,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // 计算最佳节点启动间隔
             let num_nodes = node_infos.len();
+            let app_version = env!("CARGO_PKG_VERSION");
             log::info!(
                 "Open file limit: {:?}",
                 rlimit::getrlimit(rlimit::Resource::NOFILE)
             );
-            log::info!("共找到 {} 个节点需要启动", num_nodes);
+            log::info!("共找到 {} 个节点需要启动, app_version:{}", num_nodes, app_version);
             log::info!("[prover_concurrency] authenticated_proving max concurrency = {} (from env or default)", concurrency);
+
 
             // 动态调整延迟区间
             let (min_delay, max_delay, total_time_ms, delay_desc) = if num_nodes <= 1 {

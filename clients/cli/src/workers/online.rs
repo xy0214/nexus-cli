@@ -148,21 +148,23 @@ pub async fn fetch_prover_tasks(
 
                 // Simple condition: fetch when queue is low and backoff time has passed
                 if state.should_fetch(tasks_in_queue) {
-                    if let Err(should_return) = fetch_single_task(
-                        &*orchestrator_client,
-                        &node_id,
-                        verifying_key,
-                        &sender,
-                        &event_sender,
-                        &recent_tasks,
-                        &mut state,
-                        &environment,
-                        &client_id,
-                    ).await {
+                            if let Err(should_return) = fetch_single_task(
+            &*orchestrator_client,
+            &node_id,
+            verifying_key,
+            &sender,
+            &event_sender,
+            &recent_tasks,
+            &mut state,
+            &environment,
+            &client_id,
+        ).await {
                         if should_return {
                             return;
                         }
                     }
+
+
                 }
             }
         }
@@ -170,6 +172,7 @@ pub async fn fetch_prover_tasks(
 }
 
 /// Handle successful task fetch: duplicate check, caching, and queue management
+#[allow(clippy::too_many_arguments)]
 async fn handle_task_success(
     task: Task,
     sender: &mpsc::Sender<Task>,
@@ -213,6 +216,7 @@ async fn handle_duplicate_task(event_sender: &mpsc::Sender<Event>, state: &mut T
 }
 
 /// Process a new (non-duplicate) task: cache, queue, analytics, and logging
+#[allow(clippy::too_many_arguments)]
 async fn process_new_task(
     task: Task,
     sender: &mpsc::Sender<Task>,
@@ -412,6 +416,7 @@ pub async fn submit_proofs(
     client_id: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut tasks_processed = 0;
         loop {
             tokio::select! {
                 maybe_item = results.recv() => {
@@ -428,7 +433,16 @@ pub async fn submit_proofs(
                                 &completed_tasks,
                                 &environment,
                                 &client_id,
+                                &mut tasks_processed,
                             ).await;
+
+                            // Check if we've reached the max tasks limit
+                            // if let Some(max) = max_tasks {
+                            //     if tasks_processed >= max {
+                            //         // Reached max tasks, exit cleanly
+                            //         std::process::exit(0);
+                            //     }
+                            // }
                         }
                         None => break,
                     }
@@ -487,6 +501,7 @@ async fn submit_proof_to_orchestrator(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
+    tasks_processed: &mut u32,
 ) {
     // Send submitting message
     send_proof_event(
@@ -521,6 +536,9 @@ async fn submit_proof_to_orchestrator(
             ));
             handle_submission_success(task, event_sender, completed_tasks, environment, client_id)
                 .await;
+
+            // Increment task counter
+            *tasks_processed += 1;
         }
         Err(e) => {
             handle_submission_error(
@@ -549,6 +567,7 @@ async fn process_proof_submission(
     completed_tasks: &TaskCache,
     environment: &Environment,
     client_id: &str,
+    tasks_processed: &mut u32,
 ) {
     // Check for duplicate submissions
     if check_duplicate_submission(&task, completed_tasks, event_sender).await {
@@ -570,6 +589,7 @@ async fn process_proof_submission(
         completed_tasks,
         environment,
         client_id,
+        tasks_processed,
     )
         .await;
 }
