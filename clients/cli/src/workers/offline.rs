@@ -104,7 +104,8 @@ pub fn start_workers(
                                 let acquire_message = format!("[Worker {}] 抢到锁准备计算 (Task ID: {}), lock_duration:{:?}", worker_id, task.task_id, lock_duration);
                                 let _log1 = prover_event_sender.send(Event::prover(worker_id, acquire_message, EventType::Success)).await;
                                 match authenticated_proving(&task, &environment, &client_id, Some(&prover_event_sender)).await {
-                                    Ok((proof, combined_hash)) => {
+                                    Ok((proof, combined_hash, individual_proof_hashes)) => {
+
                                         // Track analytics for successful proof (non-blocking)
                                         tokio::spawn(track_authenticated_proof_analytics(task.clone(), environment.clone(), client_id.clone()));
 
@@ -112,6 +113,7 @@ pub fn start_workers(
                                         let proof_result = ProofResult {
                                             proof,
                                             combined_hash,
+                                            individual_proof_hashes,
                                         };
                                         let _ = results_sender.send((task, proof_result)).await;
                                     }

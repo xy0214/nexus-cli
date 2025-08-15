@@ -429,6 +429,7 @@ impl Orchestrator for OrchestratorClient {
         signing_key: SigningKey,
         num_provers: usize,
         task_type: crate::nexus_orchestrator::TaskType,
+        individual_proof_hashes: &[String],
     ) -> Result<(), OrchestratorError> {
         // 获取node_id信息用于日志
         let node_info = if let Some(node_id) = &self.node_id {
@@ -445,11 +446,27 @@ impl Orchestrator for OrchestratorClient {
 
         // Detect country for network optimization (privacy-preserving: only country code, no precise location)
         let location = self.get_country().await;
-        // Only attach proof if task type is not ProofHash
-        // If task_type is None, default to attaching proof for backward compatibility
-        let proof_to_send = match task_type {
-            crate::nexus_orchestrator::TaskType::ProofHash => Vec::new(),
-            _ => proof, // Attach proof for ProofRequired or None (backward compatibility)
+        // Handle different task types
+        let (proof_to_send, all_proof_hashes_to_send) = match task_type {
+            crate::nexus_orchestrator::TaskType::ProofHash => {
+                // For ProofHash tasks, don't send proof or individual hashes
+                (Vec::new(), Vec::new())
+            }
+            crate::nexus_orchestrator::TaskType::AllProofHashes => {
+                // For AllProofHashes tasks, don't send proof but send all individual hashes
+                // Add warning for large numbers of inputs
+                if individual_proof_hashes.len() > 100 {
+                    eprintln!(
+                        "WARNING: Task with {} individual proof hashes may not scale well for ALL_PROOF_HASHES task type",
+                        individual_proof_hashes.len()
+                    );
+                }
+                (Vec::new(), individual_proof_hashes.to_vec())
+            }
+            _ => {
+                // For ProofRequired and backward compatibility, attach proof
+                (proof, Vec::new())
+            }
         };
 
         let request = SubmitProofRequest {
@@ -466,6 +483,8 @@ impl Orchestrator for OrchestratorClient {
             }),
             ed25519_public_key: public_key,
             signature,
+            all_proof_hashes: all_proof_hashes_to_send,
+            proofs: Vec::new(),
         };
         let request_bytes = Self::encode_request(&request);
         let result = match self.post_request_no_response("v3/tasks/submit", request_bytes).await {
@@ -612,6 +631,7 @@ mod tests {
                 signing_key.clone(),
                 num_workers,
                 TaskType::ProofRequired,
+                &[], // No individual proof hashes for this test
             )
             .await;
         // This will fail because we're not actually submitting to a real orchestrator,
@@ -627,6 +647,7 @@ mod tests {
                 signing_key,
                 num_workers,
                 TaskType::ProofHash,
+                &[], // No individual proof hashes for this test
             )
             .await;
         // This will also fail, but the proof should be empty in the request
